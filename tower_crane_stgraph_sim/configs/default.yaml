@@ -1,0 +1,109 @@
+project:
+  name: tower_crane_stgraph_sim
+  version: 0.1.0
+  random_seed: 20260529
+  output_dir: outputs/default_run
+
+simulation:
+  num_scenarios: 100
+  scenario_duration_s: 120.0
+  dt: 1.0
+  num_cranes_range: [2, 6]
+  save_format: csv
+
+layout:
+  site_size_m: [220.0, 180.0]
+  ensure_overlap: true
+  min_base_distance_m: 20.0
+  overlap_scene_ratio:
+    no_overlap_safe: 0.15
+    overlap_no_conflict: 0.25
+    two_crane_crossing: 0.25
+    multi_crane_avoidance: 0.25
+    delayed_or_failed_avoidance: 0.10
+
+crane_static:
+  tower_height_range_m: [35.0, 80.0]
+  jib_length_range_m: [35.0, 65.0]
+  min_radius_range_m: [4.0, 10.0]
+  max_radius_margin_m: 3.0
+  load_capacity_range_kg: [6000.0, 16000.0]
+  safety_radius_arm_m: 3.0
+  safety_radius_hook_m: 3.0
+
+motion_limits:
+  max_theta_dot_range_rad_s: [0.08, 0.22]
+  max_r_dot_range_m_s: [0.6, 1.8]
+  max_h_dot_range_m_s: [0.5, 1.3]
+  max_theta_acc_range_rad_s2: [0.04, 0.12]
+  max_r_acc_range_m_s2: [0.20, 0.60]
+  max_h_acc_range_m_s2: [0.18, 0.50]
+  response_tau_s_range: [1.0, 3.0]
+
+load_effect:
+  enabled: true
+  min_acc_scale: 0.5
+
+task_generation:
+  tasks_per_crane_range: [2, 5]
+  pickup_height_range_m: [2.5, 10.0]
+  dropoff_height_range_m: [2.5, 12.0]
+  transport_height_ratio: 0.70
+  load_weight_ratio_range: [0.10, 0.90]
+  stage_tolerance: 1.0
+
+controller:
+  k_theta: 0.35
+  k_r: 0.22
+  k_h: 0.35
+  command_smoothing: 0.20
+
+interaction:
+  enabled: true
+  short_horizon_check_s: 6.0
+  avoidance_reaction_delay_s_range: [0.0, 2.0]
+  communication_delay_s_range: [0.0, 1.5]
+  avoidance_failure_probability: 0.06
+  operator_error_probability: 0.02
+  brake_when_predicted_risk: true
+  priority_policy: static_priority
+
+risk_thresholds:
+  d_safe_arm_arm_m: 3.0
+  d_safe_arm_hook_m: 3.0
+  d_safe_hook_hook_m: 3.0
+
+sensor_observation:
+  enabled: true
+  theta_noise_std_rad: 0.008
+  r_noise_std_m: 0.10
+  h_noise_std_m: 0.10
+  theta_bias_std_rad: 0.004
+  r_bias_std_m: 0.06
+  h_bias_std_m: 0.06
+  delay_steps_range: [0, 2]
+  dropout_probability: 0.015
+  outlier_probability: 0.006
+  keep_missing_mask: true
+
+windowing:
+  input_window_s: 10.0
+  prediction_horizon_s: 8.0
+  prediction_horizons_s: [2.0, 4.0, 8.0]
+  stride_s: 2.0
+  variable_num_cranes: true
+  padding_to_max_cranes: true
+  max_cranes: 6
+
+split:
+  method: by_scenario_id
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  add_generalization_test: false
+
+quality_control:
+  target_risk_ratio_range: [0.02, 0.50]
+  generate_summary_plots: true
+  fail_on_nan_in_required_fields: true
+  fail_on_future_leakage: true

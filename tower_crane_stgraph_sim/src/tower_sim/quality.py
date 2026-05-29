@@ -10,6 +10,16 @@ from tower_sim.visualization import hist_plot, risk_ratio_plot, sample_scene_top
 from tower_sim.windowing import EDGE_FEATURE_NAMES, NODE_FEATURE_NAMES, assert_no_future_leakage, validate_split_disjoint
 
 
+def enforce_quality_gates(stats: dict[str, Any], config: dict[str, Any]) -> None:
+    """Raise when configured quality gates fail."""
+
+    qc = config.get("quality_control", {})
+    if bool(qc.get("fail_on_nan_in_required_fields", False)) and bool(stats.get("has_nan_required", False)):
+        raise ValueError("NaN found in required fields")
+    if bool(qc.get("fail_on_future_leakage", False)) and bool(stats.get("future_leakage", False)):
+        raise ValueError("Future leakage detected")
+
+
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
 
@@ -30,6 +40,8 @@ def generate_quality_report(
     edge_current: pd.DataFrame,
     edge_future_label: pd.DataFrame,
     config: dict[str, Any],
+    geometry_table: pd.DataFrame | None = None,
+    config_used_path: str | Path | None = None,
     window_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Generate quality report markdown and diagnostic plots."""
@@ -48,8 +60,9 @@ def generate_quality_report(
     hist_plot(edge_current, "d_arm_hook_min", plots_dir / "d_arm_hook_distribution.png", "arm-hook distance")
     hist_plot(edge_current, "d_hook_hook", plots_dir / "d_hook_hook_distribution.png", "hook-hook distance")
     risk_ratio_plot(edge_future_label, plots_dir / "risk_ratio_distribution.png")
-    geometry_path = out / "geometry_table.csv"
-    geometry_table = pd.read_csv(geometry_path) if geometry_path.exists() else pd.DataFrame()
+    if geometry_table is None:
+        geometry_path = out / "geometry_table.csv"
+        geometry_table = pd.read_csv(geometry_path) if geometry_path.exists() else pd.DataFrame()
     sample_scene_topview(crane_static, geometry_table, plots_dir / "sample_scene_topview.png")
     sample_time_series(state_true, plots_dir / "sample_time_series.png")
 
@@ -159,7 +172,7 @@ def generate_quality_report(
         f"- train/val/test scenario_id disjoint: {_yes_no(split_ok)}",
         f"- future label leakage detected: {_yes_no(not leakage_ok)}",
         f"- random seed: {config['project']['random_seed']}",
-        f"- config_used.yaml: {out / 'config_used.yaml'}",
+        f"- config_used.yaml: {config_used_path or (out / 'config_used.yaml')}",
         "",
         "## Window Counts",
         "",
@@ -180,4 +193,5 @@ def generate_quality_report(
         "Safety distance thresholds are simulation parameters for controlled experiments, not normative construction-code values.",
     ]
     (out / "quality_report.md").write_text("\n".join(lines), encoding="utf-8")
+    enforce_quality_gates(stats, config)
     return stats

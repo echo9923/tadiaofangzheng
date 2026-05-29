@@ -64,18 +64,20 @@ All random processes are controlled by `project.random_seed`.
 
 Each run writes these files under the configured output directory:
 
-- `scenario_table.csv`: scenario id, scene type, crane count, duration, timestep, site size, seed, split
-- `crane_static.csv`: static crane geometry and motion-limit parameters
-- `task_table.csv`: pickup/dropoff task definitions
-- `state_true.csv`: ground-truth simulated state and issued command fields
-- `state_obs.csv`: noisy/delayed/dropout observations used as model input
-- `geometry_table.csv`: reconstructed jib root/tip and hook coordinates
-- `edge_current.csv`: current-time physical-prior graph edge features
-- `edge_future_label.csv`: future minimum distances, risk labels, and label TTC values
-- `train_windows.npz`, `val_windows.npz`, `test_windows.npz`: model-ready sliding windows
+- `tables/scenario_table.csv`: scenario id, scene type, crane count, duration, timestep, site size, seed, split
+- `tables/crane_static.csv`: static crane geometry and motion-limit parameters
+- `tables/task_table.csv`: pickup/dropoff task definitions
+- `tables/state_true.csv`: ground-truth simulated state and issued command fields
+- `tables/state_obs.csv`: noisy/delayed/dropout observations used as model input
+- `tables/geometry_table.csv`: reconstructed jib root/tip and hook coordinates
+- `tables/edge_current.csv`: current-time physical-prior graph edge features
+- `tables/edge_future_label.csv`: future minimum distances, risk labels, and label TTC values
+- `windows/train_windows.npz`, `windows/val_windows.npz`, `windows/test_windows.npz`: model-ready sliding windows
+- `windows/generalization_windows.npz`: optional generalization split when `split.add_generalization_test` is enabled
 - `data_dictionary.md`: field definitions and input/label guidance
-- `quality_report.md`: dataset statistics and integrity checks
-- `plots/*.png`: diagnostic figures
+- `metadata.json`: generated-run metadata and split counts
+- `quality/quality_report.md`: dataset statistics and integrity checks
+- `quality/plots/*.png`: diagnostic figures
 
 ## Sliding Window Tensors
 
@@ -121,7 +123,7 @@ python -m pytest tests/test_no_future_leakage.py -q
 Inspect:
 
 ```bash
-outputs/debug_small/quality_report.md
+outputs/debug_small/quality/quality_report.md
 ```
 
 The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, split exclusivity, leakage checks, seed, and `config_used.yaml` path.
@@ -129,7 +131,7 @@ The report includes scenario count, crane-count distribution, total simulated ti
 Quality plots are written to:
 
 ```text
-outputs/<run_name>/plots/
+outputs/<run_name>/quality/plots/
 ```
 
 ## Using With ST-GNN or Transformer Models

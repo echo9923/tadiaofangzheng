@@ -39,16 +39,30 @@ def compute_pairwise_edge(
     d_arm_hook_i_to_j = _arm_hook_distance(geom_i, geom_j)
     d_arm_hook_j_to_i = _arm_hook_distance(geom_j, geom_i)
     d_hook_hook = point_point_distance(geom_i.hook, geom_j.hook)
-    current_min = min(d_arm_arm, d_arm_hook_i_to_j, d_arm_hook_j_to_i, d_hook_hook)
-    previous_min = current_min if prev_distances is None else float(prev_distances.get("min", current_min))
-    relative_approach_speed = max(0.0, (previous_min - current_min) / max(dt, 1e-6))
+    d_arm_hook_min = min(d_arm_hook_i_to_j, d_arm_hook_j_to_i)
+    if prev_distances is None:
+        prev_arm_arm = d_arm_arm
+        prev_arm_hook = d_arm_hook_min
+        prev_hook_hook = d_hook_hook
+    else:
+        prev_arm_arm = float(prev_distances.get("d_arm_arm", d_arm_arm))
+        prev_arm_hook = float(prev_distances.get("d_arm_hook", d_arm_hook_min))
+        prev_hook_hook = float(prev_distances.get("d_hook_hook", d_hook_hook))
+    relative_approach_speed_arm_arm = max(0.0, (prev_arm_arm - d_arm_arm) / max(dt, 1e-6))
+    relative_approach_speed_arm_hook = max(0.0, (prev_arm_hook - d_arm_hook_min) / max(dt, 1e-6))
+    relative_approach_speed_hook_hook = max(0.0, (prev_hook_hook - d_hook_hook) / max(dt, 1e-6))
+    relative_approach_speed = max(
+        relative_approach_speed_arm_arm,
+        relative_approach_speed_arm_hook,
+        relative_approach_speed_hook_hook,
+    )
 
-    def ttc(distance: float, threshold: float) -> float:
+    def ttc(distance: float, threshold: float, approach_speed: float) -> float:
         if distance <= threshold:
             return 0.0
-        if relative_approach_speed <= 1e-9:
+        if approach_speed <= 1e-9:
             return -1.0
-        return float((distance - threshold) / relative_approach_speed)
+        return float((distance - threshold) / approach_speed)
 
     thresholds = thresholds or {}
     same_height = abs((static_i.base_z + static_i.tower_height) - (static_j.base_z + static_j.tower_height)) < max(
@@ -70,12 +84,24 @@ def compute_pairwise_edge(
         "base_distance": base_distance,
         "overlap_ratio": overlap_ratio(static_i, static_j),
         "relative_approach_speed": relative_approach_speed,
-        "ttc_est_arm_arm": ttc(d_arm_arm, float(thresholds.get("d_safe_arm_arm_m", static_i.safety_radius_arm))),
-        "ttc_est_arm_hook": ttc(
-            min(d_arm_hook_i_to_j, d_arm_hook_j_to_i),
-            float(thresholds.get("d_safe_arm_hook_m", static_i.safety_radius_hook)),
+        "relative_approach_speed_arm_arm": relative_approach_speed_arm_arm,
+        "relative_approach_speed_arm_hook": relative_approach_speed_arm_hook,
+        "relative_approach_speed_hook_hook": relative_approach_speed_hook_hook,
+        "ttc_est_arm_arm": ttc(
+            d_arm_arm,
+            float(thresholds.get("d_safe_arm_arm_m", static_i.safety_radius_arm)),
+            relative_approach_speed_arm_arm,
         ),
-        "ttc_est_hook_hook": ttc(d_hook_hook, float(thresholds.get("d_safe_hook_hook_m", static_i.safety_radius_hook))),
+        "ttc_est_arm_hook": ttc(
+            d_arm_hook_min,
+            float(thresholds.get("d_safe_arm_hook_m", static_i.safety_radius_hook)),
+            relative_approach_speed_arm_hook,
+        ),
+        "ttc_est_hook_hook": ttc(
+            d_hook_hook,
+            float(thresholds.get("d_safe_hook_hook_m", static_i.safety_radius_hook)),
+            relative_approach_speed_hook_hook,
+        ),
         "same_height_risk_zone": int(same_height and overlap_ratio(static_i, static_j) > 0.0),
     }
 
@@ -84,17 +110,17 @@ def compute_edges_for_step(
     statics: list[CraneStatic],
     states: dict[int, CraneState],
     geometries: dict[int, CraneGeometry],
-    prev_pair_min: dict[tuple[int, int], float],
+    prev_pair_distances: dict[tuple[int, int], dict[str, float]],
     dt: float,
     thresholds: dict[str, float],
-) -> tuple[list[dict[str, float | int]], dict[tuple[int, int], float]]:
+) -> tuple[list[dict[str, float | int]], dict[tuple[int, int], dict[str, float]]]:
     """Compute all ordered pair edges for a simulation step."""
 
     rows: list[dict[str, float | int]] = []
-    next_prev: dict[tuple[int, int], float] = {}
+    next_prev: dict[tuple[int, int], dict[str, float]] = {}
     static_by_id = {c.crane_id: c for c in statics}
     for i, j in itertools.permutations(sorted(static_by_id), 2):
-        prev = {"min": prev_pair_min[(i, j)]} if (i, j) in prev_pair_min else None
+        prev = prev_pair_distances.get((i, j))
         row = compute_pairwise_edge(
             static_by_id[i],
             static_by_id[j],
@@ -107,13 +133,56 @@ def compute_edges_for_step(
             thresholds=thresholds,
         )
         rows.append(row)
-        next_prev[(i, j)] = min(
-            float(row["d_arm_arm"]),
-            float(row["d_arm_hook_i_to_j"]),
-            float(row["d_arm_hook_j_to_i"]),
-            float(row["d_hook_hook"]),
-        )
+        next_prev[(i, j)] = {
+            "d_arm_arm": float(row["d_arm_arm"]),
+            "d_arm_hook": min(float(row["d_arm_hook_i_to_j"]), float(row["d_arm_hook_j_to_i"])),
+            "d_hook_hook": float(row["d_hook_hook"]),
+        }
     return rows, next_prev
+
+
+def classify_short_horizon_risk(
+    statics: list[CraneStatic],
+    states: dict[int, CraneState],
+    horizon_s: float,
+    dt: float,
+    thresholds: dict[str, float],
+) -> dict[int, str]:
+    """Return yielding crane ids and the dominant future risk type."""
+
+    risk_by_crane: dict[int, str] = {}
+    static_by_id = {c.crane_id: c for c in statics}
+    priority = {"arm_arm": 3, "arm_hook": 2, "hook_hook": 1}
+    steps = max(1, int(math.ceil(horizon_s / max(dt, 1e-6))))
+    for i, j in itertools.combinations(sorted(static_by_id), 2):
+        pair_risk: str | None = None
+        pair_priority = 0
+        for k in range(1, steps + 1):
+            tau = min(horizon_s, k * dt)
+            state_i = constant_velocity_extrapolate(states[i], tau)
+            state_j = constant_velocity_extrapolate(states[j], tau)
+            geom_i = reconstruct_geometry(static_by_id[i], state_i)
+            geom_j = reconstruct_geometry(static_by_id[j], state_j)
+            d_arm_arm = segment_segment_distance(geom_i.root, geom_i.tip, geom_j.root, geom_j.tip)
+            d_arm_hook = min(
+                segment_point_distance(geom_i.root, geom_i.tip, geom_j.hook),
+                segment_point_distance(geom_j.root, geom_j.tip, geom_i.hook),
+            )
+            d_hook_hook = point_point_distance(geom_i.hook, geom_j.hook)
+            candidates = [
+                ("arm_arm", d_arm_arm, float(thresholds["d_safe_arm_arm_m"])),
+                ("arm_hook", d_arm_hook, float(thresholds["d_safe_arm_hook_m"])),
+                ("hook_hook", d_hook_hook, float(thresholds["d_safe_hook_hook_m"])),
+            ]
+            for risk_type, distance, threshold in candidates:
+                if distance < threshold and priority[risk_type] > pair_priority:
+                    pair_risk = risk_type
+                    pair_priority = priority[risk_type]
+        if pair_risk is not None:
+            low_priority = i if static_by_id[i].priority < static_by_id[j].priority else j
+            if priority[pair_risk] > priority.get(risk_by_crane.get(low_priority, ""), 0):
+                risk_by_crane[low_priority] = pair_risk
+    return risk_by_crane
 
 
 def short_horizon_risk_pairs(
@@ -125,33 +194,20 @@ def short_horizon_risk_pairs(
 ) -> set[int]:
     """Return crane ids that should yield based on constant-velocity short extrapolation."""
 
-    risky_cranes: set[int] = set()
-    static_by_id = {c.crane_id: c for c in statics}
-    steps = max(1, int(math.ceil(horizon_s / max(dt, 1e-6))))
-    for i, j in itertools.combinations(sorted(static_by_id), 2):
-        min_dist = math.inf
-        for k in range(1, steps + 1):
-            tau = min(horizon_s, k * dt)
-            state_i = constant_velocity_extrapolate(states[i], tau)
-            state_j = constant_velocity_extrapolate(states[j], tau)
-            geom_i = reconstruct_geometry(static_by_id[i], state_i)
-            geom_j = reconstruct_geometry(static_by_id[j], state_j)
-            d = min(
-                segment_segment_distance(geom_i.root, geom_i.tip, geom_j.root, geom_j.tip),
-                segment_point_distance(geom_i.root, geom_i.tip, geom_j.hook),
-                segment_point_distance(geom_j.root, geom_j.tip, geom_i.hook),
-                point_point_distance(geom_i.hook, geom_j.hook),
-            )
-            min_dist = min(min_dist, d)
-        threshold = max(
-            float(thresholds["d_safe_arm_arm_m"]),
-            float(thresholds["d_safe_arm_hook_m"]),
-            float(thresholds["d_safe_hook_hook_m"]),
-        )
-        if min_dist < threshold:
-            low_priority = i if static_by_id[i].priority < static_by_id[j].priority else j
-            risky_cranes.add(low_priority)
-    return risky_cranes
+    return set(classify_short_horizon_risk(statics, states, horizon_s, dt, thresholds))
+
+
+def avoidance_command_for_risk(command: Command, risk_type: str, static: CraneStatic) -> Command:
+    """Return an axis-aware avoidance command for the dominant risk type."""
+
+    if risk_type == "arm_arm":
+        return Command(0.0, command.r_dot_cmd, command.h_dot_cmd, brake_flag=1, emergency_flag=0)
+    if risk_type == "arm_hook":
+        return Command(0.0, 0.0, command.h_dot_cmd, brake_flag=1, emergency_flag=0)
+    if risk_type == "hook_hook":
+        upward_h_cmd = min(static.max_h_dot, max(0.0, command.h_dot_cmd, 0.25 * static.max_h_dot))
+        return Command(command.theta_dot_cmd, 0.0, upward_h_cmd, brake_flag=1, emergency_flag=0)
+    return Command(0.0, 0.0, 0.0, brake_flag=1, emergency_flag=0)
 
 
 def apply_avoidance(
@@ -168,7 +224,7 @@ def apply_avoidance(
     interaction_cfg = config["interaction"]
     if not bool(interaction_cfg.get("enabled", True)):
         return commands
-    risky_cranes = short_horizon_risk_pairs(
+    risk_by_crane = classify_short_horizon_risk(
         statics,
         states,
         float(interaction_cfg["short_horizon_check_s"]),
@@ -178,8 +234,10 @@ def apply_avoidance(
     updated: dict[int, Command] = {}
     fail_prob = float(interaction_cfg.get("avoidance_failure_probability", 0.0))
     error_prob = float(interaction_cfg.get("operator_error_probability", 0.0))
+    static_by_id = {static.crane_id: static for static in statics}
     for crane_id, command in commands.items():
-        if crane_id not in risky_cranes:
+        risk_type = risk_by_crane.get(crane_id)
+        if risk_type is None:
             if delay_counters is not None:
                 delay_counters.pop(crane_id, None)
             updated[crane_id] = command
@@ -208,7 +266,7 @@ def apply_avoidance(
             )
             continue
         if bool(interaction_cfg.get("brake_when_predicted_risk", True)):
-            updated[crane_id] = Command(0.0, 0.0, 0.0, brake_flag=1, emergency_flag=0)
+            updated[crane_id] = avoidance_command_for_risk(command, risk_type, static_by_id[crane_id])
         else:
             updated[crane_id] = Command(0.0, command.r_dot_cmd, command.h_dot_cmd, brake_flag=1, emergency_flag=0)
     return updated

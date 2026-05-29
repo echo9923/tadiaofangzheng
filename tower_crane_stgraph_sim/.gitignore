@@ -5,6 +5,7 @@ __pycache__/
 pytest-cache-files-*/
 .matplotlib_cache/
 outputs/
+test_artifacts/
 .venv/
 venv/
 build/

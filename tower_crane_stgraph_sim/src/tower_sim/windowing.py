@@ -46,6 +46,9 @@ EDGE_FEATURE_NAMES = [
     "base_distance",
     "overlap_ratio",
     "relative_approach_speed",
+    "relative_approach_speed_arm_arm",
+    "relative_approach_speed_arm_hook",
+    "relative_approach_speed_hook_hook",
     "ttc_est_arm_arm",
     "ttc_est_arm_hook",
     "ttc_est_hook_hook",
@@ -93,6 +96,17 @@ def validate_split_disjoint(train_ids: np.ndarray, val_ids: np.ndarray, test_ids
     sets = [set(map(int, arr.tolist())) for arr in [train_ids, val_ids, test_ids]]
     if sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2]:
         raise ValueError("scenario_id split overlap detected")
+
+
+def validate_named_splits_disjoint(split_ids: dict[str, np.ndarray]) -> None:
+    """Validate that all named split id arrays are mutually exclusive."""
+
+    seen: dict[int, str] = {}
+    for split, ids in split_ids.items():
+        for scenario_id in map(int, ids.tolist()):
+            if scenario_id in seen and seen[scenario_id] != split:
+                raise ValueError(f"scenario_id split overlap detected: {scenario_id} in {seen[scenario_id]} and {split}")
+            seen[scenario_id] = split
 
 
 def _node_feature(row: pd.Series, static_row: pd.Series) -> np.ndarray:
@@ -171,7 +185,10 @@ def make_windows(
     n_max = int(win_cfg["max_cranes"])
     horizon_s = float(win_cfg["prediction_horizon_s"])
 
-    samples: dict[str, list[dict[str, Any]]] = {"train": [], "val": [], "test": []}
+    configured_splits = ["train", "val", "test"]
+    if bool(config.get("split", {}).get("add_generalization_test", False)):
+        configured_splits.append("generalization")
+    samples: dict[str, list[dict[str, Any]]] = {split: [] for split in configured_splits}
     split_by_scenario = {int(row["scenario_id"]): str(row["split"]) for _, row in scenario_table.iterrows()}
     static_by_scenario = {sid: g.set_index("crane_id") for sid, g in crane_static.groupby("scenario_id")}
     obs_by_key = {
@@ -292,7 +309,7 @@ def make_windows(
 
     arrays = {
         split: np.load(output_path / f"{split}_windows.npz", allow_pickle=False)["scenario_ids"]
-        for split in ["train", "val", "test"]
+        for split in configured_splits
     }
-    validate_split_disjoint(arrays["train"], arrays["val"], arrays["test"])
+    validate_named_splits_disjoint(arrays)
     return counts

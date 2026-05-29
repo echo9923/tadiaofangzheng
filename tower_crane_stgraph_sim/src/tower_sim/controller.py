@@ -19,17 +19,15 @@ TASK_STAGES = (
 
 
 def choose_active_task(tasks: Sequence[LiftingTask], state: CraneState, timestamp: float) -> LiftingTask | None:
-    """Choose the current or next task for a crane."""
+    """Choose the task matching the state's task id when it is available."""
 
     if not tasks:
         return None
-    for task in tasks:
-        if task.task_id == state.task_id and timestamp >= task.start_time:
-            return task
-    for task in tasks:
-        if timestamp >= task.start_time:
-            return task
-    return tasks[0]
+    task_by_id = {task.task_id: task for task in tasks}
+    task = task_by_id.get(state.task_id)
+    if task is None or timestamp < task.start_time:
+        return None
+    return task
 
 
 def _near_angle(a: float, b: float, tol: float) -> bool:
@@ -47,6 +45,9 @@ def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolera
         state.task_stage = "idle_or_next_task"
         state.load_weight = 0.0
         return state
+    if state.task_stage == "idle_or_next_task":
+        state.task_stage = "move_to_pickup"
+        state.load_weight = 0.0
     if state.task_id != task.task_id:
         state.task_id = task.task_id
         state.task_stage = "move_to_pickup"
@@ -75,6 +76,7 @@ def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolera
     elif stage == "release_load":
         state.task_stage = "idle_or_next_task"
         state.load_weight = 0.0
+        state.task_id = state.task_id + 1
     return state
 
 

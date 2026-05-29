@@ -4,6 +4,7 @@ from tower_sim.windowing import (
     EDGE_FEATURE_NAMES,
     NODE_FEATURE_NAMES,
     assert_no_future_leakage,
+    validate_named_splits_disjoint,
     validate_split_disjoint,
 )
 
@@ -38,3 +39,14 @@ def test_split_scenario_ids_overlap_is_rejected() -> None:
         assert "overlap" in str(exc)
     else:
         raise AssertionError("Expected overlapping scenario ids to be rejected")
+
+
+def test_named_split_validation_allows_repeated_windows_within_same_split() -> None:
+    split_ids = {
+        "train": np.array([0, 0, 1, 1]),
+        "val": np.array([2, 2]),
+        "test": np.array([3]),
+        "generalization": np.array([4, 4]),
+    }
+
+    validate_named_splits_disjoint(split_ids)

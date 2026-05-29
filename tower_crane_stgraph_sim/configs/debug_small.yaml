@@ -5,10 +5,10 @@ project:
   output_dir: outputs/debug_small
 
 simulation:
-  num_scenarios: 4
-  scenario_duration_s: 24.0
-  dt: 1.0
-  num_cranes_range: [2, 3]
+  num_scenarios: 5
+  scenario_duration_s: 120.0
+  dt: 0.2
+  num_cranes_range: [3, 4]
   save_format: csv
 
 layout:
@@ -45,7 +45,7 @@ load_effect:
   min_acc_scale: 0.5
 
 task_generation:
-  tasks_per_crane_range: [1, 2]
+  tasks_per_crane_range: [2, 3]
   pickup_height_range_m: [3.0, 8.0]
   dropoff_height_range_m: [3.0, 10.0]
   transport_height_ratio: 0.68
@@ -60,7 +60,7 @@ controller:
 
 interaction:
   enabled: true
-  short_horizon_check_s: 4.0
+  short_horizon_check_s: 6.0
   avoidance_reaction_delay_s_range: [0.0, 1.5]
   communication_delay_s_range: [0.0, 1.0]
   avoidance_failure_probability: 0.08
@@ -87,9 +87,9 @@ sensor_observation:
   keep_missing_mask: true
 
 windowing:
-  input_window_s: 5.0
-  prediction_horizon_s: 4.0
-  prediction_horizons_s: [2.0, 4.0]
+  input_window_s: 10.0
+  prediction_horizon_s: 10.0
+  prediction_horizons_s: [2.0, 5.0, 10.0]
   stride_s: 2.0
   variable_num_cranes: true
   padding_to_max_cranes: true
@@ -100,7 +100,7 @@ split:
   train_ratio: 0.50
   val_ratio: 0.25
   test_ratio: 0.25
-  add_generalization_test: false
+  add_generalization_test: true
 
 quality_control:
   target_risk_ratio_range: [0.02, 0.60]

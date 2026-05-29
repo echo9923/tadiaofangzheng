@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from tower_sim.dataclasses import Command, CraneState, CraneStatic
 from tower_sim.dynamics import update_state
 from tower_sim.geometry import reconstruct_geometry
 from tower_sim.interaction import apply_avoidance, compute_edges_for_step
-from tower_sim.io_utils import ensure_dir, split_scenario_ids, write_csv
+from tower_sim.io_utils import dataset_paths, ensure_dataset_dirs, split_scenario_ids, write_csv
 from tower_sim.labels import compute_future_labels
 from tower_sim.layout import generate_cranes, sample_scene_type
 from tower_sim.quality import generate_quality_report
@@ -106,6 +107,9 @@ EDGE_COLUMNS = [
     "base_distance",
     "overlap_ratio",
     "relative_approach_speed",
+    "relative_approach_speed_arm_arm",
+    "relative_approach_speed_arm_hook",
+    "relative_approach_speed_hook_hook",
     "ttc_est_arm_arm",
     "ttc_est_arm_hook",
     "ttc_est_hook_hook",
@@ -209,7 +213,7 @@ def _geometry_row(scenario_id: int, timestamp: float, step: int, crane_id: int, 
     }
 
 
-def _build_data_dictionary(output_dir: Path) -> None:
+def _build_data_dictionary(output_path: Path) -> None:
     content = f"""# Data Dictionary
 
 All distances are in meters, time is in seconds, angular values are in radians, and angular differences are wrapped to [-pi, pi]. Safety thresholds are simulation parameters, not normative construction-code values.
@@ -250,7 +254,7 @@ Per-step reconstructed jib root, jib tip, and hook coordinates for every crane.
 
 ## edge_current.csv
 
-`scenario_id`, `timestamp`, `step`, `crane_i`, `crane_j`, `d_arm_arm`, `d_arm_hook_i_to_j`, `d_arm_hook_j_to_i`, `d_hook_hook`, `delta_theta`, `delta_theta_dot`, `delta_r`, `delta_h`, `delta_tower_height`, `base_distance`, `overlap_ratio`, `relative_approach_speed`, `ttc_est_arm_arm`, `ttc_est_arm_hook`, `ttc_est_hook_hook`, `same_height_risk_zone`.
+`scenario_id`, `timestamp`, `step`, `crane_i`, `crane_j`, `d_arm_arm`, `d_arm_hook_i_to_j`, `d_arm_hook_j_to_i`, `d_hook_hook`, `delta_theta`, `delta_theta_dot`, `delta_r`, `delta_h`, `delta_tower_height`, `base_distance`, `overlap_ratio`, `relative_approach_speed`, `relative_approach_speed_arm_arm`, `relative_approach_speed_arm_hook`, `relative_approach_speed_hook_hook`, `ttc_est_arm_arm`, `ttc_est_arm_hook`, `ttc_est_hook_hook`, `same_height_risk_zone`.
 
 Current-time physical-prior edge features computed from current geometry and current relative motion. These fields are allowed as model inputs. `ttc_est_*` is current-state-only and is not a future label.
 
@@ -270,15 +274,15 @@ Sliding-window tensors. `node_features` and `edge_features` are inputs. `y_traj`
 - `y_risk`: {Y_RISK_FEATURE_NAMES}
 - `y_min_distance`: {Y_MIN_DISTANCE_FEATURE_NAMES}
 
-Train/validation/test splits are by `scenario_id`; never mix windows from one scenario across splits.
+Train/validation/test splits are by `scenario_id`; never mix windows from one scenario across splits. When `split.add_generalization_test` is enabled, `windows/generalization_windows.npz` is generated from held-out scenario ids.
 """
-    (output_dir / "data_dictionary.md").write_text(content, encoding="utf-8")
+    output_path.write_text(content, encoding="utf-8")
 
 
-def _write_readme_copy(output_dir: Path) -> None:
+def _write_readme_copy(output_path: Path) -> None:
     source = Path(__file__).resolve().parents[2] / "README.md"
     if source.exists():
-        (output_dir / "README.md").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        output_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _simulate_one_scenario(
@@ -316,7 +320,7 @@ def _simulate_one_scenario(
                 task_stage="transport_to_dropoff",
             )
     prev_commands: dict[int, Command] = {}
-    prev_pair_min: dict[tuple[int, int], float] = {}
+    prev_pair_min: dict[tuple[int, int], dict[str, float]] = {}
     avoidance_delay_counters: dict[int, int] = {}
     state_rows: list[dict[str, Any]] = []
     geometry_rows: list[dict[str, Any]] = []
@@ -381,8 +385,9 @@ def _simulate_one_scenario(
 def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     """Generate all simulation tables, windows, reports, and plots."""
 
-    output_dir = ensure_dir(config["project"]["output_dir"])
-    save_config(config, output_dir / "config_used.yaml")
+    paths = ensure_dataset_dirs(dataset_paths(config["project"]["output_dir"]))
+    output_dir = paths.root
+    save_config(config, paths.config_used)
 
     base_seed = int(config["project"]["random_seed"])
     num_scenarios = int(config["simulation"]["num_scenarios"])
@@ -392,6 +397,7 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         float(config["split"]["train_ratio"]),
         float(config["split"]["val_ratio"]),
         float(config["split"]["test_ratio"]),
+        add_generalization_test=bool(config["split"].get("add_generalization_test", False)),
     )
 
     scenario_rows: list[dict[str, Any]] = []
@@ -453,14 +459,14 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         thresholds=config["risk_thresholds"],
     )
 
-    write_csv(scenario_table, output_dir / "scenario_table.csv")
-    write_csv(crane_static, output_dir / "crane_static.csv")
-    write_csv(task_table, output_dir / "task_table.csv")
-    write_csv(state_true, output_dir / "state_true.csv")
-    write_csv(state_obs, output_dir / "state_obs.csv")
-    write_csv(geometry_table, output_dir / "geometry_table.csv")
-    write_csv(edge_current, output_dir / "edge_current.csv")
-    write_csv(edge_future_label, output_dir / "edge_future_label.csv")
+    write_csv(scenario_table, paths.tables / "scenario_table.csv")
+    write_csv(crane_static, paths.tables / "crane_static.csv")
+    write_csv(task_table, paths.tables / "task_table.csv")
+    write_csv(state_true, paths.tables / "state_true.csv")
+    write_csv(state_obs, paths.tables / "state_obs.csv")
+    write_csv(geometry_table, paths.tables / "geometry_table.csv")
+    write_csv(edge_current, paths.tables / "edge_current.csv")
+    write_csv(edge_future_label, paths.tables / "edge_future_label.csv")
 
     window_counts = make_windows(
         state_obs,
@@ -470,12 +476,28 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         edge_future_label,
         scenario_table,
         config,
-        output_dir,
+        paths.windows,
     )
-    _build_data_dictionary(output_dir)
-    _write_readme_copy(output_dir)
+    _build_data_dictionary(paths.data_dictionary)
+    _write_readme_copy(paths.readme)
+    paths.metadata.write_text(
+        json.dumps(
+            {
+                "project": config["project"]["name"],
+                "version": config["project"]["version"],
+                "num_scenarios": int(scenario_table["scenario_id"].nunique()),
+                "splits": scenario_table["split"].value_counts().to_dict(),
+                "tables_dir": str(paths.tables),
+                "windows_dir": str(paths.windows),
+                "quality_dir": str(paths.quality),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     stats = generate_quality_report(
-        output_dir,
+        paths.quality,
         scenario_table,
         crane_static,
         task_table,
@@ -484,6 +506,8 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         edge_current,
         edge_future_label,
         config,
+        geometry_table=geometry_table,
+        config_used_path=paths.config_used,
         window_counts=window_counts,
     )
     return Path(output_dir), stats

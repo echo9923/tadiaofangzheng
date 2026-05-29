@@ -67,7 +67,7 @@ def compute_future_labels(
         for step in sorted_steps:
             for horizon_s in horizons_s:
                 horizon_steps = max(1, int(round(float(horizon_s) / dt)))
-                future_steps = [future for future in sorted_steps if step <= future <= step + horizon_steps]
+                future_steps = [future for future in sorted_steps if step < future <= step + horizon_steps]
                 for i, j in itertools.permutations(crane_ids, 2):
                     min_arm_arm = math.inf
                     min_arm_hook_i_to_j = math.inf
@@ -76,6 +76,20 @@ def compute_future_labels(
                     ttc_arm_arm = -1.0
                     ttc_arm_hook = -1.0
                     ttc_hook_hook = -1.0
+                    if i in state_by_step[step] and j in state_by_step[step]:
+                        current_distances = _distances(
+                            static_rows[i],
+                            static_rows[j],
+                            state_by_step[step][i],
+                            state_by_step[step][j],
+                        )
+                        current_arm_arm, current_arm_hook_i_to_j, current_arm_hook_j_to_i, current_hook_hook = current_distances
+                        if current_arm_arm < float(thresholds["d_safe_arm_arm_m"]):
+                            ttc_arm_arm = 0.0
+                        if min(current_arm_hook_i_to_j, current_arm_hook_j_to_i) < float(thresholds["d_safe_arm_hook_m"]):
+                            ttc_arm_hook = 0.0
+                        if current_hook_hook < float(thresholds["d_safe_hook_hook_m"]):
+                            ttc_hook_hook = 0.0
                     for future in future_steps:
                         if i not in state_by_step[future] or j not in state_by_step[future]:
                             continue

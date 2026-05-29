@@ -106,6 +106,9 @@ class PairwiseEdge:
     base_distance: float
     overlap_ratio: float
     relative_approach_speed: float
+    relative_approach_speed_arm_arm: float
+    relative_approach_speed_arm_hook: float
+    relative_approach_speed_hook_hook: float
     ttc_est_arm_arm: float
     ttc_est_arm_hook: float
     ttc_est_hook_hook: float

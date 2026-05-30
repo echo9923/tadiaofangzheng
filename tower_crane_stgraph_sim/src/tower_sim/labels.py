@@ -68,6 +68,8 @@ def compute_future_labels(
             for horizon_s in horizons_s:
                 horizon_steps = max(1, int(round(float(horizon_s) / dt)))
                 future_steps = [future for future in sorted_steps if step < future <= step + horizon_steps]
+                if len(future_steps) < horizon_steps:
+                    continue
                 for i, j in itertools.permutations(crane_ids, 2):
                     min_arm_arm = math.inf
                     min_arm_hook_i_to_j = math.inf

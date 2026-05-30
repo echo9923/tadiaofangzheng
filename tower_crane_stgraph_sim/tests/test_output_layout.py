@@ -190,6 +190,8 @@ def test_make_windows_writes_generalization_npz_when_enabled() -> None:
     assert (output_dir / "generalization_windows.npz").exists()
     with np.load(output_dir / "generalization_windows.npz", allow_pickle=False) as data:
         assert set(data["scenario_ids"].tolist()) == {0}
+        assert "scenario_uids" in data.files
+        assert set(data["scenario_uids"].tolist()) == {"scenario_000000"}
     try:
         shutil.rmtree(output_dir)
     except PermissionError:

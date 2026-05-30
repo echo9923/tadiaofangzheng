@@ -49,6 +49,7 @@ The YAML configuration controls:
 - `crane_static`: tower height, jib length, trolley radius limits, load capacity, safety-distance parameters
 - `motion_limits`: angular/trolley/hoist speed and acceleration limits plus first-order response time
 - `load_effect`: load-dependent acceleration scaling
+- `dynamics`: emergency braking scale and other dynamic response parameters
 - `task_generation`: pickup/dropoff heights, transport height, task count, load ratios, stage tolerance
 - `controller`: proportional command gains and smoothing
 - `interaction`: online short-horizon avoidance, failure/error probabilities, priority policy
@@ -64,7 +65,7 @@ All random processes are controlled by `project.random_seed`.
 
 Each run writes these files under the generated run directory:
 
-- `tables/scenario_table.csv`: scenario id, scene type, crane count, duration, timestep, site size, seed, split
+- `tables/scenario_table.csv`: scenario id/index, scene type, crane count, duration, timestep, site size, seed, split
 - `tables/crane_static.csv`: static crane geometry and motion-limit parameters
 - `tables/task_table.csv`: pickup/dropoff task definitions
 - `tables/state_true.csv`: ground-truth simulated state and issued command fields
@@ -77,7 +78,11 @@ Each run writes these files under the generated run directory:
 - `data_dictionary.md`: field definitions and input/label guidance
 - `metadata.json`: generated-run metadata and split counts
 - `quality/quality_report.md`: dataset statistics and integrity checks
+- `quality/risk_ratio_by_scenario.csv`: per-scenario risk positive ratios
+- `quality/feature_summary.csv`: numeric feature summary statistics for state, edge, and label tables
 - `quality/plots/*.png`: diagnostic figures
+
+Tables include both stable string business IDs such as `scenario_000000`, `crane_00`, and `task_00_0000`, plus numeric `*_index` fields used for tensor construction. Existing numeric `scenario_id`, `crane_id`, and `task_id` columns remain for backward compatibility.
 
 ## Sliding Window Tensors
 
@@ -100,6 +105,8 @@ Feature-name arrays are stored in every npz:
 - `y_risk_feature_names`
 - `y_min_distance_feature_names`
 
+Window files also include integer `scenario_ids` for existing training code and string `scenario_uids` for schema-level traceability.
+
 Node inputs use `sin(theta)` and `cos(theta)` rather than raw `theta` to avoid angle wrap discontinuity.
 
 ## Data Leakage Rules
@@ -111,6 +118,7 @@ The implementation follows these rules:
 - Train/validation/test splits are made by `scenario_id`, never by random windows.
 - `state_obs.csv` is the node-input source.
 - `state_true.csv` and `edge_future_label.csv` are used for labels.
+- Incomplete tail horizons are skipped, so `edge_future_label.csv` should not contain `inf` values from missing future windows.
 
 Run:
 
@@ -126,7 +134,7 @@ Inspect:
 outputs/debug_small/run_YYYYMMDD_HHMMSS/quality/quality_report.md
 ```
 
-The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, split exclusivity, leakage checks, seed, and `config_used.yaml` path.
+The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, split exclusivity, leakage checks, tail-label `inf` checks, no-overlap consistency checks, seed, and `config_used.yaml` path. The generator also writes `risk_ratio_by_scenario.csv` and `feature_summary.csv` in the same quality directory.
 
 Quality plots are written to:
 
@@ -172,6 +180,10 @@ They avoid discontinuity around `0` and `2*pi`.
 **Can I generate parquet instead of CSV?**
 
 Yes. Set `simulation.save_format` to include `parquet`; CSV remains supported, and windows are always written as `.npz`.
+
+**Does `emergency_flag` change the motion?**
+
+Yes. Emergency commands zero the requested velocities and use `dynamics.emergency_brake_scale` to apply stronger deceleration toward a stop.
 
 ## Extension Ideas
 

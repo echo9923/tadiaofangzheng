@@ -94,3 +94,38 @@ def test_update_state_clamps_radius_and_height_and_damps_boundary_velocity() -> 
     assert math.isclose(updated.h, static.tower_height - 2.0)
     assert updated.r_dot == 0.0
     assert updated.h_dot == 0.0
+
+
+def test_emergency_flag_zeroes_commands_and_uses_stronger_braking() -> None:
+    static = make_static()
+    state = CraneState(
+        theta=0.0,
+        r=20.0,
+        h=20.0,
+        theta_dot=0.4,
+        r_dot=1.2,
+        h_dot=-0.8,
+        theta_ddot=0.0,
+        r_ddot=0.0,
+        h_ddot=0.0,
+        load_weight=0.0,
+        task_id=0,
+        task_stage="transport_to_dropoff",
+    )
+    normal_stop = update_state(
+        state,
+        static,
+        Command(0.0, 0.0, 0.0, brake_flag=1, emergency_flag=0),
+        dt=1.0,
+    )
+    emergency_stop = update_state(
+        state,
+        static,
+        Command(10.0, 10.0, 10.0, brake_flag=1, emergency_flag=1),
+        dt=1.0,
+        emergency_brake_scale=2.0,
+    )
+
+    assert abs(emergency_stop.theta_dot) < abs(normal_stop.theta_dot)
+    assert abs(emergency_stop.r_dot) < abs(normal_stop.r_dot)
+    assert abs(emergency_stop.h_dot) < abs(normal_stop.h_dot)

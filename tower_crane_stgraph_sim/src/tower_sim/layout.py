@@ -151,3 +151,14 @@ def overlap_ratio(a: CraneStatic, b: CraneStatic) -> float:
     if radius_sum <= 0.0 or d >= radius_sum:
         return 0.0
     return float(np.clip((radius_sum - d) / max(min(a.max_radius, b.max_radius), 1e-6), 0.0, 1.0))
+
+
+def has_radius_overlap(cranes: list[CraneStatic]) -> bool:
+    """Return true when any operating radii overlap in plan view."""
+
+    for idx, crane_i in enumerate(cranes):
+        for crane_j in cranes[idx + 1 :]:
+            base_distance = math.hypot(crane_i.base_x - crane_j.base_x, crane_i.base_y - crane_j.base_y)
+            if base_distance < crane_i.max_radius + crane_j.max_radius - 1e-6:
+                return True
+    return False

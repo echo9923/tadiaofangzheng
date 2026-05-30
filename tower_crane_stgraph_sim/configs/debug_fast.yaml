@@ -44,6 +44,9 @@ load_effect:
   enabled: true
   min_acc_scale: 0.5
 
+dynamics:
+  emergency_brake_scale: 2.0
+
 task_generation:
   tasks_per_crane_range: [1, 2]
   pickup_height_range_m: [3.0, 8.0]

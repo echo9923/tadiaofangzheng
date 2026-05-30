@@ -343,3 +343,36 @@ def test_future_labels_report_positive_ttc_when_future_step_enters_risk() -> Non
     assert first["future_min_d_arm_arm"] == 0.0
     assert first["risk_arm_arm"] == 1
     assert first["ttc_label_arm_arm"] == 2.0
+
+
+def test_future_labels_skip_steps_without_complete_future_horizon() -> None:
+    crane_static = _static_rows_for_two_arm_cranes(scenario_id=4)
+    state_true = _state_rows_for_label_steps(
+        4,
+        {
+            0: 0.0,
+            1: 0.0,
+            2: 0.0,
+        },
+    )
+
+    labels = compute_future_labels(
+        state_true,
+        crane_static,
+        dt=1.0,
+        horizons_s=[2.0],
+        thresholds={
+            "d_safe_arm_arm_m": 1.0,
+            "d_safe_arm_hook_m": 1.0,
+            "d_safe_hook_hook_m": 1.0,
+        },
+    )
+
+    assert set(labels["step"].unique()) == {0}
+    distance_columns = [
+        "future_min_d_arm_arm",
+        "future_min_d_arm_hook_i_to_j",
+        "future_min_d_arm_hook_j_to_i",
+        "future_min_d_hook_hook",
+    ]
+    assert not labels[distance_columns].isin([math.inf, -math.inf]).any().any()

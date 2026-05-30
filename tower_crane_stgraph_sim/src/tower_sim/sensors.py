@@ -24,6 +24,15 @@ OBS_COLUMNS = [
     "emergency_flag",
 ]
 
+ID_COLUMNS = [
+    "scenario_uid",
+    "scenario_index",
+    "crane_uid",
+    "crane_index",
+    "task_uid",
+    "task_index",
+]
+
 
 def generate_observations(state_true: pd.DataFrame, config: dict[str, Any], rng: np.random.Generator) -> pd.DataFrame:
     """Generate noisy, delayed, dropout-prone observations from true states."""
@@ -68,14 +77,18 @@ def generate_observations(state_true: pd.DataFrame, config: dict[str, Any], rng:
         obs["obs_delay_steps"] = delays.astype(int)
         rows.append(obs)
     result = pd.concat(rows, ignore_index=True) if rows else state_true.copy()
+    id_columns = [col for col in ID_COLUMNS if col in result.columns]
     return result[
         [
             "scenario_id",
+            *[col for col in ["scenario_uid", "scenario_index"] if col in id_columns],
             "timestamp",
             "step",
             "crane_id",
+            *[col for col in ["crane_uid", "crane_index"] if col in id_columns],
             *OBS_COLUMNS,
             "task_id",
+            *[col for col in ["task_uid", "task_index"] if col in id_columns],
             "task_stage",
             "theta_missing",
             "r_missing",

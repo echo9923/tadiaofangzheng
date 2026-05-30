@@ -93,7 +93,7 @@ def assert_no_future_leakage(node_feature_names: list[str], edge_feature_names: 
 def validate_split_disjoint(train_ids: np.ndarray, val_ids: np.ndarray, test_ids: np.ndarray) -> None:
     """Validate that scenario ids are mutually exclusive across splits."""
 
-    sets = [set(map(int, arr.tolist())) for arr in [train_ids, val_ids, test_ids]]
+    sets = [set(arr.tolist()) for arr in [train_ids, val_ids, test_ids]]
     if sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2]:
         raise ValueError("scenario_id split overlap detected")
 
@@ -101,9 +101,9 @@ def validate_split_disjoint(train_ids: np.ndarray, val_ids: np.ndarray, test_ids
 def validate_named_splits_disjoint(split_ids: dict[str, np.ndarray]) -> None:
     """Validate that all named split id arrays are mutually exclusive."""
 
-    seen: dict[int, str] = {}
+    seen: dict[Any, str] = {}
     for split, ids in split_ids.items():
-        for scenario_id in map(int, ids.tolist()):
+        for scenario_id in ids.tolist():
             if scenario_id in seen and seen[scenario_id] != split:
                 raise ValueError(f"scenario_id split overlap detected: {scenario_id} in {seen[scenario_id]} and {split}")
             seen[scenario_id] = split
@@ -158,6 +158,7 @@ def _empty_npz(path: Path) -> None:
         y_risk_feature_names=np.array(Y_RISK_FEATURE_NAMES),
         y_min_distance_feature_names=np.array(Y_MIN_DISTANCE_FEATURE_NAMES),
         scenario_ids=np.array([], dtype=np.int32),
+        scenario_uids=np.array([], dtype="<U1"),
         window_start_steps=np.array([], dtype=np.int32),
     )
 
@@ -190,6 +191,10 @@ def make_windows(
         configured_splits.append("generalization")
     samples: dict[str, list[dict[str, Any]]] = {split: [] for split in configured_splits}
     split_by_scenario = {int(row["scenario_id"]): str(row["split"]) for _, row in scenario_table.iterrows()}
+    uid_by_scenario = {
+        int(row["scenario_id"]): str(row.get("scenario_uid", f"scenario_{int(row['scenario_id']):06d}"))
+        for _, row in scenario_table.iterrows()
+    }
     static_by_scenario = {sid: g.set_index("crane_id") for sid, g in crane_static.groupby("scenario_id")}
     obs_by_key = {
         (int(row["scenario_id"]), int(row["step"]), int(row["crane_id"])): row
@@ -276,6 +281,7 @@ def make_windows(
                     "y_risk": y_risk,
                     "y_min_distance": y_dist,
                     "scenario_id": sid,
+                    "scenario_uid": uid_by_scenario.get(sid, f"scenario_{sid:06d}"),
                     "window_start_step": start,
                 }
             )
@@ -303,6 +309,7 @@ def make_windows(
             y_risk_feature_names=np.array(Y_RISK_FEATURE_NAMES),
             y_min_distance_feature_names=np.array(Y_MIN_DISTANCE_FEATURE_NAMES),
             scenario_ids=np.array([s["scenario_id"] for s in split_samples], dtype=np.int32),
+            scenario_uids=np.array([s["scenario_uid"] for s in split_samples]),
             window_start_steps=np.array([s["window_start_step"] for s in split_samples], dtype=np.int32),
         )
         counts[split] = len(split_samples)

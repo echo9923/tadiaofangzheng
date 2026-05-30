@@ -23,7 +23,7 @@ from tower_sim.geometry import reconstruct_geometry
 from tower_sim.interaction import apply_avoidance, compute_edges_for_step
 from tower_sim.io_utils import dataset_paths, ensure_dataset_dirs, make_run_root, split_scenario_ids, write_csv, write_optional_parquet
 from tower_sim.labels import compute_future_labels
-from tower_sim.layout import generate_cranes, sample_scene_type
+from tower_sim.layout import generate_cranes, has_radius_overlap, sample_scene_type
 from tower_sim.quality import generate_quality_report
 from tower_sim.sensors import generate_observations
 from tower_sim.tasks import generate_tasks
@@ -39,6 +39,8 @@ from tower_sim.windowing import (
 
 SCENARIO_COLUMNS = [
     "scenario_id",
+    "scenario_uid",
+    "scenario_index",
     "scene_type",
     "num_cranes",
     "duration_s",
@@ -47,13 +49,18 @@ SCENARIO_COLUMNS = [
     "site_width_m",
     "seed",
     "split",
+    "layout_relabel_reason",
 ]
 
 STATE_COLUMNS = [
     "scenario_id",
+    "scenario_uid",
+    "scenario_index",
     "timestamp",
     "step",
     "crane_id",
+    "crane_uid",
+    "crane_index",
     "theta",
     "r",
     "h",
@@ -70,14 +77,20 @@ STATE_COLUMNS = [
     "brake_flag",
     "emergency_flag",
     "task_id",
+    "task_uid",
+    "task_index",
     "task_stage",
 ]
 
 GEOMETRY_COLUMNS = [
     "scenario_id",
+    "scenario_uid",
+    "scenario_index",
     "timestamp",
     "step",
     "crane_id",
+    "crane_uid",
+    "crane_index",
     "root_x",
     "root_y",
     "root_z",
@@ -161,6 +174,18 @@ def _initial_state(crane: CraneStatic, rng: np.random.Generator) -> CraneState:
     )
 
 
+def _scenario_uid(scenario_index: int) -> str:
+    return f"scenario_{scenario_index:06d}"
+
+
+def _crane_uid(crane_index: int) -> str:
+    return f"crane_{crane_index:02d}"
+
+
+def _task_uid(crane_index: int, task_index: int) -> str:
+    return f"task_{crane_index:02d}_{task_index:04d}"
+
+
 def _state_row(
     scenario_id: int,
     timestamp: float,
@@ -171,9 +196,13 @@ def _state_row(
 ) -> dict[str, Any]:
     return {
         "scenario_id": scenario_id,
+        "scenario_uid": _scenario_uid(scenario_id),
+        "scenario_index": scenario_id,
         "timestamp": timestamp,
         "step": step,
         "crane_id": crane_id,
+        "crane_uid": _crane_uid(crane_id),
+        "crane_index": crane_id,
         "theta": state.theta,
         "r": state.r,
         "h": state.h,
@@ -190,6 +219,8 @@ def _state_row(
         "brake_flag": command.brake_flag,
         "emergency_flag": command.emergency_flag,
         "task_id": state.task_id,
+        "task_uid": _task_uid(crane_id, state.task_id),
+        "task_index": state.task_id,
         "task_stage": state.task_stage,
     }
 
@@ -198,9 +229,13 @@ def _geometry_row(scenario_id: int, timestamp: float, step: int, crane_id: int, 
     geom = reconstruct_geometry(static, state)
     return {
         "scenario_id": scenario_id,
+        "scenario_uid": _scenario_uid(scenario_id),
+        "scenario_index": scenario_id,
         "timestamp": timestamp,
         "step": step,
         "crane_id": crane_id,
+        "crane_uid": _crane_uid(crane_id),
+        "crane_index": crane_id,
         "root_x": geom.root[0],
         "root_y": geom.root[1],
         "root_z": geom.root[2],
@@ -220,49 +255,59 @@ All distances are in meters, time is in seconds, angular values are in radians, 
 
 ## scenario_table.csv
 
-`scenario_id`, `scene_type`, `num_cranes`, `duration_s`, `dt`, `site_length_m`, `site_width_m`, `seed`, `split`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `scene_type`, `num_cranes`, `duration_s`, `dt`, `site_length_m`, `site_width_m`, `seed`, `split`, `layout_relabel_reason`.
+
+`scenario_uid` is the stable string business id, while `scenario_index` and legacy `scenario_id` are numeric indexes for tensor construction.
 
 ## crane_static.csv
 
-`scenario_id`, `crane_id`, `base_x`, `base_y`, `base_z`, `tower_height`, `jib_length`, `min_radius`, `max_radius`, `safety_radius_arm`, `safety_radius_hook`, `max_theta_dot`, `max_r_dot`, `max_h_dot`, `max_theta_acc`, `max_r_acc`, `max_h_acc`, `response_tau`, `load_capacity`, `priority`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `crane_id`, `crane_uid`, `crane_index`, `base_x`, `base_y`, `base_z`, `tower_height`, `jib_length`, `min_radius`, `max_radius`, `safety_radius_arm`, `safety_radius_hook`, `max_theta_dot`, `max_r_dot`, `max_h_dot`, `max_theta_acc`, `max_r_acc`, `max_h_acc`, `response_tau`, `load_capacity`, `priority`.
 
 These are static node attributes and crane motion limits. They may be used as input features where appropriate.
 
 ## task_table.csv
 
-`scenario_id`, `crane_id`, `task_id`, `start_time`, `pickup_theta`, `pickup_r`, `pickup_h`, `dropoff_theta`, `dropoff_r`, `dropoff_h`, `transport_h`, `load_weight`, `priority`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `crane_id`, `crane_uid`, `crane_index`, `task_id`, `task_uid`, `task_index`, `start_time`, `pickup_theta`, `pickup_r`, `pickup_h`, `dropoff_theta`, `dropoff_r`, `dropoff_h`, `transport_h`, `load_weight`, `priority`.
 
 This table explains the simulated task plan. It is not required as a direct model input because executed commands and states are already stored in state tables.
 
 ## state_true.csv
 
-`scenario_id`, `timestamp`, `step`, `crane_id`, `theta`, `r`, `h`, `theta_dot`, `r_dot`, `h_dot`, `theta_ddot`, `r_ddot`, `h_ddot`, `load_weight`, `command_theta`, `command_r`, `command_h`, `brake_flag`, `emergency_flag`, `task_id`, `task_stage`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `crane_id`, `crane_uid`, `crane_index`, `theta`, `r`, `h`, `theta_dot`, `r_dot`, `h_dot`, `theta_ddot`, `r_ddot`, `h_ddot`, `load_weight`, `command_theta`, `command_r`, `command_h`, `brake_flag`, `emergency_flag`, `task_id`, `task_uid`, `task_index`, `task_stage`.
 
-Ground-truth dynamic states and issued commands. This table is used for geometry reconstruction and labels. Use `state_obs.csv` for model input.
+Ground-truth dynamic states and issued commands. Emergency commands zero target velocities and use the configured emergency brake scale in the dynamics update. This table is used for geometry reconstruction and labels. Use `state_obs.csv` for model input.
 
 ## state_obs.csv
 
-`scenario_id`, `timestamp`, `step`, `crane_id`, `theta`, `r`, `h`, `theta_dot`, `r_dot`, `h_dot`, `theta_ddot`, `r_ddot`, `h_ddot`, `load_weight`, `command_theta`, `command_r`, `command_h`, `brake_flag`, `emergency_flag`, `task_id`, `task_stage`, `theta_missing`, `r_missing`, `h_missing`, `obs_delay_steps`, `is_outlier`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `crane_id`, `crane_uid`, `crane_index`, `theta`, `r`, `h`, `theta_dot`, `r_dot`, `h_dot`, `theta_ddot`, `r_ddot`, `h_ddot`, `load_weight`, `command_theta`, `command_r`, `command_h`, `brake_flag`, `emergency_flag`, `task_id`, `task_uid`, `task_index`, `task_stage`, `theta_missing`, `r_missing`, `h_missing`, `obs_delay_steps`, `is_outlier`.
 
 Noisy/delayed/dropout observations derived from `state_true.csv`. This table is the node-input source. Missing masks and outlier markers are included.
 
 ## geometry_table.csv
 
-`scenario_id`, `timestamp`, `step`, `crane_id`, `root_x`, `root_y`, `root_z`, `tip_x`, `tip_y`, `tip_z`, `hook_x`, `hook_y`, `hook_z`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `crane_id`, `crane_uid`, `crane_index`, `root_x`, `root_y`, `root_z`, `tip_x`, `tip_y`, `tip_z`, `hook_x`, `hook_y`, `hook_z`.
 
 Per-step reconstructed jib root, jib tip, and hook coordinates for every crane.
 
 ## edge_current.csv
 
-`scenario_id`, `timestamp`, `step`, `crane_i`, `crane_j`, `d_arm_arm`, `d_arm_hook_i_to_j`, `d_arm_hook_j_to_i`, `d_hook_hook`, `delta_theta`, `delta_theta_dot`, `delta_r`, `delta_h`, `delta_tower_height`, `base_distance`, `overlap_ratio`, `relative_approach_speed`, `relative_approach_speed_arm_arm`, `relative_approach_speed_arm_hook`, `relative_approach_speed_hook_hook`, `ttc_est_arm_arm`, `ttc_est_arm_hook`, `ttc_est_hook_hook`, `same_height_risk_zone`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `crane_i`, `crane_j`, `crane_i_uid`, `crane_j_uid`, `crane_i_index`, `crane_j_index`, `d_arm_arm`, `d_arm_hook_i_to_j`, `d_arm_hook_j_to_i`, `d_hook_hook`, `delta_theta`, `delta_theta_dot`, `delta_r`, `delta_h`, `delta_tower_height`, `base_distance`, `overlap_ratio`, `relative_approach_speed`, `relative_approach_speed_arm_arm`, `relative_approach_speed_arm_hook`, `relative_approach_speed_hook_hook`, `ttc_est_arm_arm`, `ttc_est_arm_hook`, `ttc_est_hook_hook`, `same_height_risk_zone`.
 
 Current-time physical-prior edge features computed from current geometry and current relative motion. These fields are allowed as model inputs. `ttc_est_*` is current-state-only and is not a future label.
 
 ## edge_future_label.csv
 
-`scenario_id`, `timestamp`, `step`, `horizon_s`, `crane_i`, `crane_j`, `future_min_d_arm_arm`, `future_min_d_arm_hook_i_to_j`, `future_min_d_arm_hook_j_to_i`, `future_min_d_hook_hook`, `risk_arm_arm`, `risk_arm_hook_i_to_j`, `risk_arm_hook_j_to_i`, `risk_hook_hook`, `ttc_label_arm_arm`, `ttc_label_arm_hook`, `ttc_label_hook_hook`.
+`scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `horizon_s`, `crane_i`, `crane_j`, `crane_i_uid`, `crane_j_uid`, `crane_i_index`, `crane_j_index`, `future_min_d_arm_arm`, `future_min_d_arm_hook_i_to_j`, `future_min_d_arm_hook_j_to_i`, `future_min_d_hook_hook`, `risk_arm_arm`, `risk_arm_hook_i_to_j`, `risk_arm_hook_j_to_i`, `risk_hook_hook`, `ttc_label_arm_arm`, `ttc_label_arm_hook`, `ttc_label_hook_hook`.
 
-Future minimum distances, risk labels, and label TTC values computed from `state_true.csv`. These fields are labels only and must not be used as input features.
+Future minimum distances, risk labels, and label TTC values computed from complete future windows in `state_true.csv`. Tail steps without a complete horizon are skipped. These fields are labels only and must not be used as input features.
+
+## quality/risk_ratio_by_scenario.csv
+
+Per-scenario risk positive ratios for arm-arm, arm-hook, hook-hook, and any-risk labels.
+
+## quality/feature_summary.csv
+
+Numeric feature summary statistics for `state_true`, `edge_current`, and `edge_future_label`.
 
 ## *_windows.npz
 
@@ -282,10 +327,16 @@ Train/validation/test splits are by `scenario_id`; never mix windows from one sc
 def _configured_save_formats(config: dict[str, Any]) -> set[str]:
     value = config.get("simulation", {}).get("save_format", "csv")
     if isinstance(value, str):
-        return {value.lower()}
-    if isinstance(value, (list, tuple)):
-        return {str(item).lower() for item in value}
-    return {"csv"}
+        formats = {value.lower()}
+    elif isinstance(value, (list, tuple)):
+        formats = {str(item).lower() for item in value}
+    else:
+        raise ValueError("simulation.save_format must be a string or a list")
+    allowed = {"csv", "parquet", "npz"}
+    unknown = formats - allowed
+    if unknown:
+        raise ValueError(f"simulation.save_format contains unsupported values: {sorted(unknown)}")
+    return formats
 
 
 def _write_table(df: pd.DataFrame, tables_dir: Path, name: str, save_formats: set[str]) -> None:
@@ -308,17 +359,40 @@ def _write_readme_copy(output_path: Path) -> None:
         output_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
+def _generate_validated_cranes(
+    scenario_id: int,
+    scene_type: str,
+    num_cranes: int,
+    config: dict[str, Any],
+    rng: np.random.Generator,
+    max_attempts: int = 100,
+) -> tuple[str, str, list[CraneStatic]]:
+    if scene_type != "no_overlap_safe":
+        return scene_type, "", generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
+
+    for _ in range(max_attempts):
+        cranes = generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
+        if not has_radius_overlap(cranes):
+            return scene_type, "", cranes
+
+    fallback_scene_type = "overlap_no_conflict"
+    cranes = generate_cranes(scenario_id, fallback_scene_type, num_cranes, config, rng)
+    return fallback_scene_type, "no_overlap_infeasible", cranes
+
+
 def _simulate_one_scenario(
     scenario_id: int,
     scene_type: str,
     num_cranes: int,
     config: dict[str, Any],
     rng: np.random.Generator,
+    cranes: list[CraneStatic] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     dt = float(config["simulation"]["dt"])
     duration = float(config["simulation"]["scenario_duration_s"])
     steps = int(round(duration / dt)) + 1
-    cranes = generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
+    if cranes is None:
+        cranes = generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
     tasks = generate_tasks(scenario_id, scene_type, cranes, config, rng)
     tasks_by_crane = {crane.crane_id: [task for task in tasks if task.crane_id == crane.crane_id] for crane in cranes}
     states = {crane.crane_id: _initial_state(crane, rng) for crane in cranes}
@@ -386,6 +460,7 @@ def _simulate_one_scenario(
                 min_acc_scale=float(config["load_effect"].get("min_acc_scale", 0.5))
                 if bool(config["load_effect"].get("enabled", True))
                 else 1.0,
+                emergency_brake_scale=float(config.get("dynamics", {}).get("emergency_brake_scale", 2.0)),
             )
             next_states[crane_id] = next_state
             state_rows.append(_state_row(scenario_id, timestamp, step, crane_id, next_state, commands[crane_id]))
@@ -438,25 +513,36 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         rng = np.random.default_rng(seed)
         scene_type = sample_scene_type(rng, config["layout"]["overlap_scene_ratio"])
         num_cranes = _num_cranes_for_scene(scene_type, num_min, num_max, rng)
-        cranes, tasks, states, geometries, edges = _simulate_one_scenario(
+        scene_type, layout_relabel_reason, crane_objects = _generate_validated_cranes(
             scenario_id,
             scene_type,
             num_cranes,
             config,
             rng,
         )
+        cranes, tasks, states, geometries, edges = _simulate_one_scenario(
+            scenario_id,
+            scene_type,
+            num_cranes,
+            config,
+            rng,
+            cranes=crane_objects,
+        )
         site_length, site_width = config["layout"]["site_size_m"]
         scenario_rows.append(
             {
                 "scenario_id": scenario_id,
+                "scenario_uid": _scenario_uid(scenario_id),
+                "scenario_index": scenario_id,
                 "scene_type": scene_type,
-                "num_cranes": num_cranes,
+                "num_cranes": len(crane_objects),
                 "duration_s": float(config["simulation"]["scenario_duration_s"]),
                 "dt": float(config["simulation"]["dt"]),
                 "site_length_m": float(site_length),
                 "site_width_m": float(site_width),
                 "seed": seed,
                 "split": split_assignments[scenario_id],
+                "layout_relabel_reason": layout_relabel_reason,
             }
         )
         crane_rows.extend(cranes)
@@ -468,9 +554,28 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     scenario_table = pd.DataFrame(scenario_rows, columns=SCENARIO_COLUMNS)
     crane_static = pd.DataFrame(crane_rows)
     task_table = pd.DataFrame(task_rows)
+    if not crane_static.empty:
+        crane_static["scenario_uid"] = crane_static["scenario_id"].map(_scenario_uid)
+        crane_static["scenario_index"] = crane_static["scenario_id"]
+        crane_static["crane_uid"] = crane_static["crane_id"].map(_crane_uid)
+        crane_static["crane_index"] = crane_static["crane_id"]
+    if not task_table.empty:
+        task_table["scenario_uid"] = task_table["scenario_id"].map(_scenario_uid)
+        task_table["scenario_index"] = task_table["scenario_id"]
+        task_table["crane_uid"] = task_table["crane_id"].map(_crane_uid)
+        task_table["crane_index"] = task_table["crane_id"]
+        task_table["task_uid"] = [_task_uid(int(row["crane_id"]), int(row["task_id"])) for _, row in task_table.iterrows()]
+        task_table["task_index"] = task_table["task_id"]
     state_true = pd.DataFrame(state_rows, columns=STATE_COLUMNS)
     geometry_table = pd.DataFrame(geometry_rows, columns=GEOMETRY_COLUMNS)
     edge_current = pd.DataFrame(edge_rows, columns=EDGE_COLUMNS)
+    if not edge_current.empty:
+        edge_current["scenario_uid"] = edge_current["scenario_id"].map(_scenario_uid)
+        edge_current["scenario_index"] = edge_current["scenario_id"]
+        edge_current["crane_i_uid"] = edge_current["crane_i"].map(_crane_uid)
+        edge_current["crane_j_uid"] = edge_current["crane_j"].map(_crane_uid)
+        edge_current["crane_i_index"] = edge_current["crane_i"]
+        edge_current["crane_j_index"] = edge_current["crane_j"]
     obs_rng = np.random.default_rng(scenario_seed(base_seed, 0, stream=9))
     state_obs = generate_observations(state_true, config, obs_rng)
     horizons_s = [float(x) for x in config["windowing"].get("prediction_horizons_s", [config["windowing"]["prediction_horizon_s"]])]
@@ -481,6 +586,13 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         horizons_s=horizons_s,
         thresholds=config["risk_thresholds"],
     )
+    if not edge_future_label.empty:
+        edge_future_label["scenario_uid"] = edge_future_label["scenario_id"].map(_scenario_uid)
+        edge_future_label["scenario_index"] = edge_future_label["scenario_id"]
+        edge_future_label["crane_i_uid"] = edge_future_label["crane_i"].map(_crane_uid)
+        edge_future_label["crane_j_uid"] = edge_future_label["crane_j"].map(_crane_uid)
+        edge_future_label["crane_i_index"] = edge_future_label["crane_i"]
+        edge_future_label["crane_j_index"] = edge_future_label["crane_j"]
 
     save_formats = _configured_save_formats(config)
     _write_table(scenario_table, paths.tables, "scenario_table", save_formats)

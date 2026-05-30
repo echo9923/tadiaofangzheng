@@ -42,13 +42,22 @@ def update_state(
     h_clearance: float = 2.0,
     h_min: float = 0.0,
     min_acc_scale: float = 0.5,
+    emergency_brake_scale: float = 2.0,
 ) -> CraneState:
     """Advance one crane state by one kinematic time step."""
 
     scale = load_acceleration_scale(state.load_weight, static.load_capacity, min_acc_scale=min_acc_scale)
+    theta_cmd = command.theta_dot_cmd
+    r_cmd = command.r_dot_cmd
+    h_cmd = command.h_dot_cmd
+    if command.emergency_flag:
+        theta_cmd = 0.0
+        r_cmd = 0.0
+        h_cmd = 0.0
+        scale *= max(1.0, float(emergency_brake_scale))
     theta_dot, theta_ddot = _limit_axis_velocity(
         state.theta_dot,
-        command.theta_dot_cmd,
+        theta_cmd,
         static.max_theta_dot,
         static.max_theta_acc * scale,
         static.response_tau,
@@ -56,7 +65,7 @@ def update_state(
     )
     r_dot, r_ddot = _limit_axis_velocity(
         state.r_dot,
-        command.r_dot_cmd,
+        r_cmd,
         static.max_r_dot,
         static.max_r_acc * scale,
         static.response_tau,
@@ -64,7 +73,7 @@ def update_state(
     )
     h_dot, h_ddot = _limit_axis_velocity(
         state.h_dot,
-        command.h_dot_cmd,
+        h_cmd,
         static.max_h_dot,
         static.max_h_acc * scale,
         static.response_tau,

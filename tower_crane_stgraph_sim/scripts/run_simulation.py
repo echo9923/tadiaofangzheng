@@ -19,13 +19,25 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate tower crane ST-graph simulation data.")
     parser.add_argument("--config", required=True, help="Path to YAML configuration file.")
     parser.add_argument("--num-scenarios", type=int, default=None, help="Override simulation.num_scenarios.")
+    parser.add_argument("--duration", type=float, default=None, help="Override simulation.scenario_duration_s.")
+    parser.add_argument("--seed", type=int, default=None, help="Override project.random_seed.")
+    parser.add_argument("--dt", type=float, default=None, help="Override simulation.dt.")
     parser.add_argument("--output-dir", default=None, help="Override project.output_dir.")
+    parser.add_argument("--run-id", default=None, help="Use a reproducible run directory name under project.output_dir.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    config = apply_overrides(load_config(args.config), args.num_scenarios, args.output_dir)
+    config = apply_overrides(
+        load_config(args.config),
+        num_scenarios=args.num_scenarios,
+        output_dir=args.output_dir,
+        duration=args.duration,
+        seed=args.seed,
+        dt=args.dt,
+        run_id=args.run_id,
+    )
     mpl_cache = Path(config["project"]["output_dir"]) / ".matplotlib_cache"
     mpl_cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(mpl_cache.resolve()))

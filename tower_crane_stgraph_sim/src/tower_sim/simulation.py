@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from tower_sim.config import save_config, scenario_seed
+from tower_sim.config import get_command_smoothing, get_stage_tolerance, save_config, scenario_seed
 from tower_sim.controller import (
     advance_task_stage,
     choose_active_task,
@@ -21,7 +21,7 @@ from tower_sim.dataclasses import Command, CraneState, CraneStatic
 from tower_sim.dynamics import update_state
 from tower_sim.geometry import reconstruct_geometry
 from tower_sim.interaction import apply_avoidance, compute_edges_for_step
-from tower_sim.io_utils import dataset_paths, ensure_dataset_dirs, split_scenario_ids, write_csv
+from tower_sim.io_utils import dataset_paths, ensure_dataset_dirs, make_run_root, split_scenario_ids, write_csv, write_optional_parquet
 from tower_sim.labels import compute_future_labels
 from tower_sim.layout import generate_cranes, sample_scene_type
 from tower_sim.quality import generate_quality_report
@@ -279,6 +279,29 @@ Train/validation/test splits are by `scenario_id`; never mix windows from one sc
     output_path.write_text(content, encoding="utf-8")
 
 
+def _configured_save_formats(config: dict[str, Any]) -> set[str]:
+    value = config.get("simulation", {}).get("save_format", "csv")
+    if isinstance(value, str):
+        return {value.lower()}
+    if isinstance(value, (list, tuple)):
+        return {str(item).lower() for item in value}
+    return {"csv"}
+
+
+def _write_table(df: pd.DataFrame, tables_dir: Path, name: str, save_formats: set[str]) -> None:
+    if "csv" in save_formats:
+        write_csv(df, tables_dir / f"{name}.csv")
+    if "parquet" in save_formats:
+        write_optional_parquet(df, tables_dir / f"{name}.parquet")
+
+
+def _num_cranes_for_scene(scene_type: str, num_min: int, num_max: int, rng: np.random.Generator) -> int:
+    sampled = int(rng.integers(num_min, num_max + 1))
+    if scene_type == "two_crane_crossing":
+        return max(3, sampled)
+    return sampled
+
+
 def _write_readme_copy(output_path: Path) -> None:
     source = Path(__file__).resolve().parents[2] / "README.md"
     if source.exists():
@@ -327,6 +350,8 @@ def _simulate_one_scenario(
     edge_rows: list[dict[str, Any]] = []
 
     static_by_id = {crane.crane_id: crane for crane in cranes}
+    stage_tolerance = get_stage_tolerance(config["task_generation"])
+    command_smoothing = get_command_smoothing(config["controller"])
     for step in range(steps):
         timestamp = step * dt
         commands: dict[int, Command] = {}
@@ -334,7 +359,7 @@ def _simulate_one_scenario(
         for crane_id, state in states.items():
             current_state = _copy_state_with_stage(state)
             task = choose_active_task(tasks_by_crane[crane_id], current_state, timestamp)
-            current_state = advance_task_stage(current_state, task, float(config["task_generation"]["stage_tolerance"]))
+            current_state = advance_task_stage(current_state, task, stage_tolerance)
             target = target_for_stage(task, current_state)
             command = make_nominal_command(
                 current_state,
@@ -344,7 +369,7 @@ def _simulate_one_scenario(
                 float(config["controller"]["k_r"]),
                 float(config["controller"]["k_h"]),
             )
-            command = smooth_command(command, prev_commands.get(crane_id), float(config["controller"].get("command_smoothing", 0.0)))
+            command = smooth_command(command, prev_commands.get(crane_id), command_smoothing)
             staged_states[crane_id] = current_state
             commands[crane_id] = command
 
@@ -385,7 +410,8 @@ def _simulate_one_scenario(
 def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     """Generate all simulation tables, windows, reports, and plots."""
 
-    paths = ensure_dataset_dirs(dataset_paths(config["project"]["output_dir"]))
+    run_root = make_run_root(config["project"]["output_dir"], config["project"].get("run_id"))
+    paths = ensure_dataset_dirs(dataset_paths(run_root))
     output_dir = paths.root
     save_config(config, paths.config_used)
 
@@ -411,10 +437,7 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         seed = scenario_seed(base_seed, scenario_id)
         rng = np.random.default_rng(seed)
         scene_type = sample_scene_type(rng, config["layout"]["overlap_scene_ratio"])
-        if scene_type == "two_crane_crossing":
-            num_cranes = 2
-        else:
-            num_cranes = int(rng.integers(num_min, num_max + 1))
+        num_cranes = _num_cranes_for_scene(scene_type, num_min, num_max, rng)
         cranes, tasks, states, geometries, edges = _simulate_one_scenario(
             scenario_id,
             scene_type,
@@ -459,14 +482,15 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         thresholds=config["risk_thresholds"],
     )
 
-    write_csv(scenario_table, paths.tables / "scenario_table.csv")
-    write_csv(crane_static, paths.tables / "crane_static.csv")
-    write_csv(task_table, paths.tables / "task_table.csv")
-    write_csv(state_true, paths.tables / "state_true.csv")
-    write_csv(state_obs, paths.tables / "state_obs.csv")
-    write_csv(geometry_table, paths.tables / "geometry_table.csv")
-    write_csv(edge_current, paths.tables / "edge_current.csv")
-    write_csv(edge_future_label, paths.tables / "edge_future_label.csv")
+    save_formats = _configured_save_formats(config)
+    _write_table(scenario_table, paths.tables, "scenario_table", save_formats)
+    _write_table(crane_static, paths.tables, "crane_static", save_formats)
+    _write_table(task_table, paths.tables, "task_table", save_formats)
+    _write_table(state_true, paths.tables, "state_true", save_formats)
+    _write_table(state_obs, paths.tables, "state_obs", save_formats)
+    _write_table(geometry_table, paths.tables, "geometry_table", save_formats)
+    _write_table(edge_current, paths.tables, "edge_current", save_formats)
+    _write_table(edge_future_label, paths.tables, "edge_future_label", save_formats)
 
     window_counts = make_windows(
         state_obs,

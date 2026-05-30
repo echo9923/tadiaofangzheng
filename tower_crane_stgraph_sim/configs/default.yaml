@@ -2,14 +2,14 @@ project:
   name: tower_crane_stgraph_sim
   version: 0.1.0
   random_seed: 20260529
-  output_dir: outputs/default_run
+  output_dir: outputs/full_version_dataset
 
 simulation:
-  num_scenarios: 100
-  scenario_duration_s: 120.0
-  dt: 1.0
-  num_cranes_range: [2, 6]
-  save_format: csv
+  num_scenarios: 1000
+  scenario_duration_s: 900.0
+  dt: 0.2
+  num_cranes_range: [3, 6]
+  save_format: [csv, parquet, npz]
 
 layout:
   site_size_m: [220.0, 180.0]
@@ -48,15 +48,19 @@ task_generation:
   tasks_per_crane_range: [2, 5]
   pickup_height_range_m: [2.5, 10.0]
   dropoff_height_range_m: [2.5, 12.0]
-  transport_height_ratio: 0.70
+  transport_height_ratio: [0.55, 0.85]
   load_weight_ratio_range: [0.10, 0.90]
-  stage_tolerance: 1.0
+  stage_tolerance:
+    theta_rad: 0.03
+    r_m: 0.4
+    h_m: 0.4
 
 controller:
   k_theta: 0.35
   k_r: 0.22
   k_h: 0.35
-  command_smoothing: 0.20
+  command_smoothing: true
+  command_smoothing_alpha: 0.20
 
 interaction:
   enabled: true

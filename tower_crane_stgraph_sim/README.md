@@ -34,10 +34,10 @@ python scripts/run_simulation.py --config configs/debug_small.yaml
 Batch-style run:
 
 ```bash
-python scripts/run_simulation.py --config configs/default.yaml --num-scenarios 100 --output-dir outputs/run_001
+python scripts/run_simulation.py --config configs/default.yaml --num-scenarios 20 --duration 600 --seed 42 --dt 0.2 --output-dir outputs/debug_run --run-id run_001
 ```
 
-The script prints the output directory and key quality statistics after generation.
+The script writes each generation under `project.output_dir/run_YYYYMMDD_HHMMSS/`. Pass `--run-id` when you want a reproducible run directory name. The script prints the resolved output directory and key quality statistics after generation.
 
 ## Configuration
 
@@ -62,7 +62,7 @@ All random processes are controlled by `project.random_seed`.
 
 ## Output Tables
 
-Each run writes these files under the configured output directory:
+Each run writes these files under the generated run directory:
 
 - `tables/scenario_table.csv`: scenario id, scene type, crane count, duration, timestep, site size, seed, split
 - `tables/crane_static.csv`: static crane geometry and motion-limit parameters
@@ -123,7 +123,7 @@ python -m pytest tests/test_no_future_leakage.py -q
 Inspect:
 
 ```bash
-outputs/debug_small/quality/quality_report.md
+outputs/debug_small/run_YYYYMMDD_HHMMSS/quality/quality_report.md
 ```
 
 The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, split exclusivity, leakage checks, seed, and `config_used.yaml` path.
@@ -131,7 +131,7 @@ The report includes scenario count, crane-count distribution, total simulated ti
 Quality plots are written to:
 
 ```text
-outputs/<run_name>/quality/plots/
+outputs/<base_dir>/<run_name>/quality/plots/
 ```
 
 ## Using With ST-GNN or Transformer Models
@@ -171,7 +171,7 @@ They avoid discontinuity around `0` and `2*pi`.
 
 **Can I generate parquet instead of CSV?**
 
-CSV is the required baseline. Optional parquet support can be added by installing `pyarrow` and extending `io_utils.py`.
+Yes. Set `simulation.save_format` to include `parquet`; CSV remains supported, and windows are always written as `.npz`.
 
 ## Extension Ideas
 

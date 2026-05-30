@@ -5,7 +5,7 @@ import uuid
 import numpy as np
 import pandas as pd
 
-from tower_sim.io_utils import dataset_paths, split_scenario_ids
+from tower_sim.io_utils import dataset_paths, make_run_root, split_scenario_ids
 from tower_sim.windowing import make_windows
 
 
@@ -21,6 +21,19 @@ def test_dataset_paths_use_formal_dataset_layout() -> None:
     assert paths.config_used == root / "config_used.yaml"
     assert paths.metadata == root / "metadata.json"
     assert paths.data_dictionary == root / "data_dictionary.md"
+
+
+def test_make_run_root_adds_timestamped_run_directory() -> None:
+    run_root = make_run_root(Path("outputs/full_version_dataset"))
+
+    assert run_root.parent == Path("outputs/full_version_dataset")
+    assert run_root.name.startswith("run_")
+
+
+def test_make_run_root_uses_explicit_run_id_for_reproducible_paths() -> None:
+    run_root = make_run_root(Path("outputs/full_version_dataset"), run_id="run_001")
+
+    assert run_root == Path("outputs/full_version_dataset") / "run_001"
 
 
 def test_split_scenario_ids_can_reserve_generalization_split() -> None:

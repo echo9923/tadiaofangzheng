@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -37,6 +38,13 @@ def dataset_paths(root: str | Path) -> DatasetPaths:
         data_dictionary=root_path / "data_dictionary.md",
         readme=root_path / "README.md",
     )
+
+
+def make_run_root(base_dir: str | Path, run_id: str | None = None) -> Path:
+    """Return a per-run output root under a configured base directory."""
+
+    run_name = run_id if run_id is not None else datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    return Path(base_dir) / run_name
 
 
 def ensure_dataset_dirs(paths: DatasetPaths) -> DatasetPaths:

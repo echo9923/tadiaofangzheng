@@ -34,11 +34,27 @@ def _near_angle(a: float, b: float, tol: float) -> bool:
     return abs(wrap_to_pi(a - b)) <= tol
 
 
-def _near_xyz(state: CraneState, theta: float, r: float, h: float, tol: float) -> bool:
-    return _near_angle(state.theta, theta, tol) and abs(state.r - r) <= tol and abs(state.h - h) <= tol
+def _normalize_stage_tolerance(stage_tolerance: float | Sequence[float]) -> tuple[float, float, float]:
+    if isinstance(stage_tolerance, (list, tuple)):
+        if len(stage_tolerance) != 3:
+            raise ValueError("stage_tolerance must be a scalar or a three-value sequence")
+        return float(stage_tolerance[0]), float(stage_tolerance[1]), float(stage_tolerance[2])
+    scalar = float(stage_tolerance)
+    return scalar, scalar, scalar
 
 
-def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolerance: float) -> CraneState:
+def _near_xyz(
+    state: CraneState,
+    theta: float,
+    r: float,
+    h: float,
+    stage_tolerance: float | Sequence[float],
+) -> bool:
+    theta_tol, r_tol, h_tol = _normalize_stage_tolerance(stage_tolerance)
+    return _near_angle(state.theta, theta, theta_tol) and abs(state.r - r) <= r_tol and abs(state.h - h) <= h_tol
+
+
+def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolerance: float | Sequence[float]) -> CraneState:
     """Advance task stage using geometric tolerance only."""
 
     if task is None:
@@ -53,6 +69,7 @@ def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolera
         state.task_stage = "move_to_pickup"
         state.load_weight = 0.0
 
+    _, _, h_tol = _normalize_stage_tolerance(stage_tolerance)
     stage = state.task_stage
     if stage == "move_to_pickup" and _near_xyz(
         state, task.pickup_theta, task.pickup_r, task.transport_h, stage_tolerance
@@ -63,7 +80,7 @@ def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolera
     ):
         state.task_stage = "lift_load"
         state.load_weight = task.load_weight
-    elif stage == "lift_load" and abs(state.h - task.transport_h) <= stage_tolerance:
+    elif stage == "lift_load" and abs(state.h - task.transport_h) <= h_tol:
         state.task_stage = "transport_to_dropoff"
     elif stage == "transport_to_dropoff" and _near_xyz(
         state, task.dropoff_theta, task.dropoff_r, task.transport_h, stage_tolerance

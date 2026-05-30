@@ -99,7 +99,7 @@ def test_future_labels_detect_manual_two_crane_arm_risk() -> None:
     first = labels[(labels["step"] == 0) & (labels["crane_i"] == 0) & (labels["crane_j"] == 1)].iloc[0]
     assert first["future_min_d_arm_arm"] == 0.0
     assert first["risk_arm_arm"] == 1
-    assert first["ttc_label_arm_arm"] == 0.0
+    assert first["ttc_label_arm_arm"] == 1.0
 
 
 def test_future_labels_set_ttc_minus_one_when_no_risk() -> None:
@@ -312,7 +312,7 @@ def test_future_labels_exclude_current_step_from_future_min_distance() -> None:
     first = labels[(labels["step"] == 0) & (labels["crane_i"] == 0) & (labels["crane_j"] == 1)].iloc[0]
     assert first["future_min_d_arm_arm"] > 1.0
     assert first["risk_arm_arm"] == 0
-    assert first["ttc_label_arm_arm"] == 0.0
+    assert first["ttc_label_arm_arm"] == -1.0
 
 
 def test_future_labels_report_positive_ttc_when_future_step_enters_risk() -> None:

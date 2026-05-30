@@ -67,3 +67,25 @@ def test_idle_state_transitions_to_next_task_when_task_is_available() -> None:
     assert updated.task_id == 1
     assert updated.task_stage == "move_to_pickup"
     assert updated.load_weight == 0.0
+
+
+def test_stage_tolerance_uses_separate_angle_radius_height_thresholds() -> None:
+    state = CraneState(
+        theta=0.04,
+        r=10.2,
+        h=20.2,
+        theta_dot=0.0,
+        r_dot=0.0,
+        h_dot=0.0,
+        theta_ddot=0.0,
+        r_ddot=0.0,
+        h_ddot=0.0,
+        load_weight=0.0,
+        task_id=0,
+        task_stage="move_to_pickup",
+    )
+    task = make_task(0, 0.0)
+
+    updated = advance_task_stage(state, task, stage_tolerance=(0.03, 0.4, 0.4))
+
+    assert updated.task_stage == "move_to_pickup"

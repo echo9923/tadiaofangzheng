@@ -9,8 +9,10 @@ from tower_sim.interaction import apply_avoidance, avoidance_command_for_risk, c
 
 def make_static(crane_id: int, x: float, y: float, priority: int) -> CraneStatic:
     return CraneStatic(
-        scenario_id=0,
-        crane_id=crane_id,
+        scenario_id="scenario_000000",
+        scenario_index=0,
+        crane_id=f"crane_{crane_id:02d}",
+        crane_index=crane_id,
         base_x=x,
         base_y=y,
         base_z=0.0,
@@ -80,8 +82,41 @@ def test_pairwise_edge_has_separate_approach_speeds_and_ttc_by_distance_type() -
     assert "relative_approach_speed_arm_arm" in edge
     assert "relative_approach_speed_arm_hook" in edge
     assert "relative_approach_speed_hook_hook" in edge
-    assert edge["relative_approach_speed_arm_arm"] == 5.0
-    assert edge["relative_approach_speed_arm_hook"] > 0.0
+    assert edge["relative_approach_speed_arm_arm"] == 0.0
+    assert edge["relative_approach_speed_arm_hook"] == 0.0
+    assert edge["relative_approach_speed_hook_hook"] == 0.0
+
+
+def test_pairwise_edge_approach_speed_uses_current_velocity_projection_not_previous_distance() -> None:
+    static_i = make_static(0, 0.0, 0.0, priority=2)
+    static_j = make_static(1, 25.0, 0.0, priority=1)
+    state_i = make_state(0.0, r=10.0)
+    state_j = make_state(math.pi, r=10.0)
+    state_i.r_dot = 1.0
+    state_j.r_dot = 1.0
+    geom_i = reconstruct_geometry(static_i, state_i)
+    geom_j = reconstruct_geometry(static_j, state_j)
+
+    edge = compute_pairwise_edge(
+        static_i,
+        static_j,
+        state_i,
+        state_j,
+        geom_i,
+        geom_j,
+        prev_distances={
+            "d_arm_arm": 0.0,
+            "d_arm_hook": 0.0,
+            "d_hook_hook": 0.0,
+        },
+        dt=1.0,
+        thresholds={
+            "d_safe_arm_arm_m": 1.0,
+            "d_safe_arm_hook_m": 1.0,
+            "d_safe_hook_hook_m": 1.0,
+        },
+    )
+
     assert edge["relative_approach_speed_hook_hook"] > 0.0
 
 

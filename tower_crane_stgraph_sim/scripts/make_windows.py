@@ -4,16 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-import pandas as pd
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from tower_sim.config import load_config
-from tower_sim.io_utils import dataset_paths
+from tower_sim.io_utils import dataset_paths, read_table
 from tower_sim.windowing import make_windows
 
 
@@ -28,12 +25,12 @@ def main() -> None:
     windows_dir = paths.windows if paths.tables.exists() else data_dir
     config = load_config(args.config)
     counts = make_windows(
-        pd.read_csv(tables_dir / "state_obs.csv"),
-        pd.read_csv(tables_dir / "state_true.csv"),
-        pd.read_csv(tables_dir / "crane_static.csv"),
-        pd.read_csv(tables_dir / "edge_current.csv"),
-        pd.read_csv(tables_dir / "edge_future_label.csv"),
-        pd.read_csv(tables_dir / "scenario_table.csv"),
+        read_table(tables_dir, "state_obs"),
+        read_table(tables_dir, "state_true"),
+        read_table(tables_dir, "crane_static"),
+        read_table(tables_dir, "edge_current"),
+        read_table(tables_dir, "edge_future_label"),
+        read_table(tables_dir, "scenario_table"),
         config,
         windows_dir,
     )

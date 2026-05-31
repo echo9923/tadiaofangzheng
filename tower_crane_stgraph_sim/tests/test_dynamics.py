@@ -92,8 +92,39 @@ def test_update_state_clamps_radius_and_height_and_damps_boundary_velocity() -> 
 
     assert math.isclose(updated.r, static.max_radius)
     assert math.isclose(updated.h, static.tower_height - 2.0)
-    assert updated.r_dot == 0.0
-    assert updated.h_dot == 0.0
+    assert abs(updated.r_ddot) <= static.max_r_acc + 1e-12
+    assert abs(updated.h_ddot) <= static.max_h_acc + 1e-12
+
+
+def test_update_state_does_not_create_acceleration_spike_when_clamping_boundaries() -> None:
+    static = make_static()
+    state = CraneState(
+        theta=0.0,
+        r=static.max_radius,
+        h=static.tower_height - 2.0,
+        theta_dot=0.0,
+        r_dot=static.max_r_dot,
+        h_dot=static.max_h_dot,
+        theta_ddot=0.0,
+        r_ddot=0.0,
+        h_ddot=0.0,
+        load_weight=0.0,
+        task_id=0,
+        task_stage="transport_to_dropoff",
+    )
+
+    updated = update_state(
+        state,
+        static,
+        Command(0.0, static.max_r_dot, static.max_h_dot, brake_flag=0, emergency_flag=0),
+        dt=1.0,
+        h_clearance=2.0,
+    )
+
+    assert math.isclose(updated.r, static.max_radius)
+    assert math.isclose(updated.h, static.tower_height - 2.0)
+    assert abs(updated.r_ddot) <= static.max_r_acc + 1e-12
+    assert abs(updated.h_ddot) <= static.max_h_acc + 1e-12
 
 
 def test_emergency_flag_zeroes_commands_and_uses_stronger_braking() -> None:

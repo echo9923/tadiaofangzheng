@@ -12,6 +12,7 @@ from tower_sim.geometry import (
     segment_point_distance,
     segment_segment_distance,
 )
+from tower_sim.ids import crane_id_from_index, crane_index_from_id, crane_key, scenario_id_from_index, scenario_index_from_id
 
 LABEL_COLUMNS = [
     "future_min_d_arm_arm",
@@ -48,19 +49,31 @@ def compute_future_labels(
 ) -> pd.DataFrame:
     """Compute future minimum distances and risk labels from true states."""
 
-    rows: list[dict[str, float | int]] = []
-    state_true_sorted = state_true.sort_values(["scenario_id", "step", "crane_id"])
-    for scenario_id, s_group in state_true_sorted.groupby("scenario_id"):
-        c_group = crane_static[crane_static["scenario_id"] == scenario_id]
+    rows: list[dict[str, float | int | str]] = []
+    state_true_work = state_true.copy()
+    crane_static_work = crane_static.copy()
+    if "scenario_index" not in state_true_work.columns:
+        state_true_work["scenario_index"] = state_true_work["scenario_id"].map(scenario_index_from_id)
+    if "crane_index" not in state_true_work.columns:
+        state_true_work["crane_index"] = state_true_work["crane_id"].map(crane_index_from_id)
+    if "scenario_index" not in crane_static_work.columns:
+        crane_static_work["scenario_index"] = crane_static_work["scenario_id"].map(scenario_index_from_id)
+    if "crane_index" not in crane_static_work.columns:
+        crane_static_work["crane_index"] = crane_static_work["crane_id"].map(crane_index_from_id)
+    state_true_sorted = state_true_work.sort_values(["scenario_index", "step", "crane_index"])
+    for scenario_index, s_group in state_true_sorted.groupby("scenario_index"):
+        scenario_index_int = int(scenario_index)
+        scenario_id = str(s_group["scenario_id"].iloc[0]) if "scenario_id" in s_group else scenario_id_from_index(scenario_index_int)
+        c_group = crane_static_work[crane_static_work["scenario_index"] == scenario_index_int]
         static_rows = {
-            int(row["crane_id"]): row.to_dict()
+            crane_key(row): row.to_dict()
             for _, row in c_group.iterrows()
         }
         state_by_step: dict[int, dict[int, dict[str, Any]]] = {}
         timestamp_by_step: dict[int, float] = {}
         for _, row in s_group.iterrows():
             step = int(row["step"])
-            state_by_step.setdefault(step, {})[int(row["crane_id"])] = row.to_dict()
+            state_by_step.setdefault(step, {})[crane_key(row)] = row.to_dict()
             timestamp_by_step[step] = float(row["timestamp"])
         sorted_steps = sorted(state_by_step)
         crane_ids = sorted(static_rows)
@@ -80,7 +93,8 @@ def compute_future_labels(
                     ttc_hook_hook = -1.0
                     for future in future_steps:
                         if i not in state_by_step[future] or j not in state_by_step[future]:
-                            continue
+                            min_arm_arm = math.inf
+                            break
                         d_arm_arm, d_arm_hook_i_to_j, d_arm_hook_j_to_i, d_hook_hook = _distances(
                             static_rows[i],
                             static_rows[j],
@@ -104,14 +118,24 @@ def compute_future_labels(
                             ttc_arm_hook = elapsed
                         if ttc_hook_hook < 0.0 and d_hook_hook < float(thresholds["d_safe_hook_hook_m"]):
                             ttc_hook_hook = elapsed
+                    if math.isinf(min_arm_arm) or math.isinf(min_arm_hook_i_to_j) or math.isinf(min_arm_hook_j_to_i) or math.isinf(min_hook_hook):
+                        continue
+                    crane_i_id = str(static_rows[i].get("crane_id", crane_id_from_index(i)))
+                    crane_j_id = str(static_rows[j].get("crane_id", crane_id_from_index(j)))
                     rows.append(
                         {
-                            "scenario_id": int(scenario_id),
+                            "scenario_id": scenario_id,
+                            "scenario_uid": scenario_id,
+                            "scenario_index": scenario_index_int,
                             "timestamp": timestamp_by_step[step],
                             "step": int(step),
                             "horizon_s": float(horizon_s),
-                            "crane_i": int(i),
-                            "crane_j": int(j),
+                            "crane_i": crane_i_id,
+                            "crane_j": crane_j_id,
+                            "crane_i_uid": crane_i_id,
+                            "crane_j_uid": crane_j_id,
+                            "crane_i_index": int(i),
+                            "crane_j_index": int(j),
                             "future_min_d_arm_arm": min_arm_arm,
                             "future_min_d_arm_hook_i_to_j": min_arm_hook_i_to_j,
                             "future_min_d_arm_hook_j_to_i": min_arm_hook_j_to_i,

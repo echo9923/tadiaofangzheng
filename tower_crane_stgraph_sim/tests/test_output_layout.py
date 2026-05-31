@@ -5,7 +5,7 @@ import uuid
 import numpy as np
 import pandas as pd
 
-from tower_sim.io_utils import dataset_paths, make_run_root, split_scenario_ids
+from tower_sim.io_utils import dataset_paths, make_run_root, read_table, split_scenario_ids
 from tower_sim.windowing import make_windows
 
 
@@ -196,3 +196,185 @@ def test_make_windows_writes_generalization_npz_when_enabled() -> None:
         shutil.rmtree(output_dir)
     except PermissionError:
         pass
+
+
+def test_read_table_prefers_csv_and_falls_back_to_parquet() -> None:
+    output_dir = Path("test_artifacts") / f"read_table_{uuid.uuid4().hex}"
+    output_dir.mkdir(parents=True)
+    csv_data = pd.DataFrame([{"value": 1}])
+    parquet_data = pd.DataFrame([{"value": 2}])
+    csv_data.to_csv(output_dir / "sample.csv", index=False)
+
+    assert read_table(output_dir, "sample").loc[0, "value"] == 1
+
+    try:
+        import pyarrow  # noqa: F401
+    except Exception:
+        return
+
+    (output_dir / "sample.csv").unlink()
+    parquet_data.to_parquet(output_dir / "sample.parquet", index=False)
+
+    assert read_table(output_dir, "sample").loc[0, "value"] == 2
+
+
+def test_make_windows_accepts_string_business_ids_and_numeric_indexes() -> None:
+    output_dir = Path("test_artifacts") / f"string_windows_{uuid.uuid4().hex}"
+    output_dir.mkdir(parents=True)
+    scenario_table = pd.DataFrame(
+        [
+            {
+                "scenario_id": "scenario_000042",
+                "scenario_index": 42,
+                "scenario_uid": "scenario_000042",
+                "split": "train",
+            },
+        ]
+    )
+    crane_static = pd.DataFrame(
+        [
+            {
+                "scenario_id": "scenario_000042",
+                "scenario_index": 42,
+                "crane_id": f"crane_{crane_index:02d}",
+                "crane_uid": f"crane_{crane_index:02d}",
+                "crane_index": crane_index,
+                "tower_height": 30.0,
+                "jib_length": 20.0,
+                "max_radius": 20.0,
+                "priority": 1,
+            }
+            for crane_index in [0, 1]
+        ]
+    )
+    rows = []
+    for step in range(5):
+        for crane_index in [0, 1]:
+            rows.append(
+                {
+                    "scenario_id": "scenario_000042",
+                    "scenario_index": 42,
+                    "scenario_uid": "scenario_000042",
+                    "timestamp": float(step),
+                    "step": step,
+                    "crane_id": f"crane_{crane_index:02d}",
+                    "crane_uid": f"crane_{crane_index:02d}",
+                    "crane_index": crane_index,
+                    "theta": 0.0,
+                    "r": 10.0 + crane_index,
+                    "h": 20.0,
+                    "theta_dot": 0.0,
+                    "r_dot": 0.0,
+                    "h_dot": 0.0,
+                    "theta_ddot": 0.0,
+                    "r_ddot": 0.0,
+                    "h_ddot": 0.0,
+                    "load_weight": 0.0,
+                    "command_theta": 0.0,
+                    "command_r": 0.0,
+                    "command_h": 0.0,
+                    "brake_flag": 0,
+                    "emergency_flag": 0,
+                    "task_id": f"task_{crane_index:02d}_0000",
+                    "task_uid": f"task_{crane_index:02d}_0000",
+                    "task_index": 0,
+                    "task_stage": "transport_to_dropoff",
+                    "theta_missing": 0,
+                    "r_missing": 0,
+                    "h_missing": 0,
+                }
+            )
+    state_obs = pd.DataFrame(rows)
+    state_true = state_obs.drop(columns=["theta_missing", "r_missing", "h_missing"]).copy()
+    edge_rows = []
+    label_rows = []
+    for step in range(5):
+        for i, j in [(0, 1), (1, 0)]:
+            edge_rows.append(
+                {
+                    "scenario_id": "scenario_000042",
+                    "scenario_index": 42,
+                    "scenario_uid": "scenario_000042",
+                    "timestamp": float(step),
+                    "step": step,
+                    "crane_i": f"crane_{i:02d}",
+                    "crane_j": f"crane_{j:02d}",
+                    "crane_i_uid": f"crane_{i:02d}",
+                    "crane_j_uid": f"crane_{j:02d}",
+                    "crane_i_index": i,
+                    "crane_j_index": j,
+                    "d_arm_arm": 10.0,
+                    "d_arm_hook_i_to_j": 10.0,
+                    "d_arm_hook_j_to_i": 10.0,
+                    "d_hook_hook": 10.0,
+                    "delta_theta": 0.0,
+                    "delta_theta_dot": 0.0,
+                    "delta_r": 0.0,
+                    "delta_h": 0.0,
+                    "delta_tower_height": 0.0,
+                    "base_distance": 10.0,
+                    "overlap_ratio": 1.0,
+                    "relative_approach_speed": 0.0,
+                    "relative_approach_speed_arm_arm": 0.0,
+                    "relative_approach_speed_arm_hook": 0.0,
+                    "relative_approach_speed_hook_hook": 0.0,
+                    "ttc_est_arm_arm": -1.0,
+                    "ttc_est_arm_hook": -1.0,
+                    "ttc_est_hook_hook": -1.0,
+                    "same_height_risk_zone": 0,
+                }
+            )
+            label_rows.append(
+                {
+                    "scenario_id": "scenario_000042",
+                    "scenario_index": 42,
+                    "scenario_uid": "scenario_000042",
+                    "timestamp": float(step),
+                    "step": step,
+                    "horizon_s": 2.0,
+                    "crane_i": f"crane_{i:02d}",
+                    "crane_j": f"crane_{j:02d}",
+                    "crane_i_uid": f"crane_{i:02d}",
+                    "crane_j_uid": f"crane_{j:02d}",
+                    "crane_i_index": i,
+                    "crane_j_index": j,
+                    "future_min_d_arm_arm": 10.0,
+                    "future_min_d_arm_hook_i_to_j": 10.0,
+                    "future_min_d_arm_hook_j_to_i": 10.0,
+                    "future_min_d_hook_hook": 10.0,
+                    "risk_arm_arm": 0,
+                    "risk_arm_hook_i_to_j": 0,
+                    "risk_arm_hook_j_to_i": 0,
+                    "risk_hook_hook": 0,
+                    "ttc_label_arm_arm": -1.0,
+                    "ttc_label_arm_hook": -1.0,
+                    "ttc_label_hook_hook": -1.0,
+                }
+            )
+    config = {
+        "simulation": {"dt": 1.0},
+        "windowing": {
+            "input_window_s": 2.0,
+            "prediction_horizon_s": 2.0,
+            "stride_s": 1.0,
+            "max_cranes": 2,
+        },
+        "split": {"add_generalization_test": False},
+    }
+
+    counts = make_windows(
+        state_obs,
+        state_true,
+        crane_static,
+        pd.DataFrame(edge_rows),
+        pd.DataFrame(label_rows),
+        scenario_table,
+        config,
+        output_dir,
+    )
+
+    assert counts["train"] > 0
+    with np.load(output_dir / "train_windows.npz", allow_pickle=False) as data:
+        assert set(data["scenario_ids"].tolist()) == {42}
+        assert set(data["scenario_indices"].tolist()) == {42}
+        assert set(data["scenario_business_ids"].tolist()) == {"scenario_000042"}

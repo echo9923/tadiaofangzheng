@@ -40,17 +40,17 @@ def compute_pairwise_edge(
     d_arm_hook_j_to_i = _arm_hook_distance(geom_j, geom_i)
     d_hook_hook = point_point_distance(geom_i.hook, geom_j.hook)
     d_arm_hook_min = min(d_arm_hook_i_to_j, d_arm_hook_j_to_i)
-    if prev_distances is None:
-        prev_arm_arm = d_arm_arm
-        prev_arm_hook = d_arm_hook_min
-        prev_hook_hook = d_hook_hook
-    else:
-        prev_arm_arm = float(prev_distances.get("d_arm_arm", d_arm_arm))
-        prev_arm_hook = float(prev_distances.get("d_arm_hook", d_arm_hook_min))
-        prev_hook_hook = float(prev_distances.get("d_hook_hook", d_hook_hook))
-    relative_approach_speed_arm_arm = max(0.0, (prev_arm_arm - d_arm_arm) / max(dt, 1e-6))
-    relative_approach_speed_arm_hook = max(0.0, (prev_arm_hook - d_arm_hook_min) / max(dt, 1e-6))
-    relative_approach_speed_hook_hook = max(0.0, (prev_hook_hook - d_hook_hook) / max(dt, 1e-6))
+    dt_safe = max(dt, 1e-6)
+    next_i = constant_velocity_extrapolate(state_i, dt_safe)
+    next_j = constant_velocity_extrapolate(state_j, dt_safe)
+    next_geom_i = reconstruct_geometry(static_i, next_i)
+    next_geom_j = reconstruct_geometry(static_j, next_j)
+    next_d_arm_arm = segment_segment_distance(next_geom_i.root, next_geom_i.tip, next_geom_j.root, next_geom_j.tip)
+    next_d_arm_hook_min = min(_arm_hook_distance(next_geom_i, next_geom_j), _arm_hook_distance(next_geom_j, next_geom_i))
+    next_d_hook_hook = point_point_distance(next_geom_i.hook, next_geom_j.hook)
+    relative_approach_speed_arm_arm = max(0.0, (d_arm_arm - next_d_arm_arm) / dt_safe)
+    relative_approach_speed_arm_hook = max(0.0, (d_arm_hook_min - next_d_arm_hook_min) / dt_safe)
+    relative_approach_speed_hook_hook = max(0.0, (d_hook_hook - next_d_hook_hook) / dt_safe)
     relative_approach_speed = max(
         relative_approach_speed_arm_arm,
         relative_approach_speed_arm_hook,
@@ -72,6 +72,8 @@ def compute_pairwise_edge(
     return {
         "crane_i": static_i.crane_id,
         "crane_j": static_j.crane_id,
+        "crane_i_index": static_i.crane_index,
+        "crane_j_index": static_j.crane_index,
         "d_arm_arm": d_arm_arm,
         "d_arm_hook_i_to_j": d_arm_hook_i_to_j,
         "d_arm_hook_j_to_i": d_arm_hook_j_to_i,
@@ -118,7 +120,7 @@ def compute_edges_for_step(
 
     rows: list[dict[str, float | int]] = []
     next_prev: dict[tuple[int, int], dict[str, float]] = {}
-    static_by_id = {c.crane_id: c for c in statics}
+    static_by_id = {c.crane_index: c for c in statics}
     for i, j in itertools.permutations(sorted(static_by_id), 2):
         prev = prev_pair_distances.get((i, j))
         row = compute_pairwise_edge(
@@ -151,7 +153,7 @@ def classify_short_horizon_risk(
     """Return yielding crane ids and the dominant future risk type."""
 
     risk_by_crane: dict[int, str] = {}
-    static_by_id = {c.crane_id: c for c in statics}
+    static_by_id = {c.crane_index: c for c in statics}
     priority = {"arm_arm": 3, "arm_hook": 2, "hook_hook": 1}
     steps = max(1, int(math.ceil(horizon_s / max(dt, 1e-6))))
     for i, j in itertools.combinations(sorted(static_by_id), 2):
@@ -234,7 +236,7 @@ def apply_avoidance(
     updated: dict[int, Command] = {}
     fail_prob = float(interaction_cfg.get("avoidance_failure_probability", 0.0))
     error_prob = float(interaction_cfg.get("operator_error_probability", 0.0))
-    static_by_id = {static.crane_id: static for static in statics}
+    static_by_id = {static.crane_index: static for static in statics}
     for crane_id, command in commands.items():
         risk_type = risk_by_crane.get(crane_id)
         if risk_type is None:

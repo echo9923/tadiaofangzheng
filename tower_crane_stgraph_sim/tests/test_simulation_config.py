@@ -65,6 +65,7 @@ def test_transport_height_ratio_accepts_configured_range() -> None:
 def test_default_config_is_formal_dataset_configuration() -> None:
     config = load_config(Path("configs") / "default.yaml")
 
+    assert config["simulation"]["num_scenarios"] == 100
     assert config["simulation"]["scenario_duration_s"] == 900.0
     assert config["simulation"]["dt"] == 0.2
     assert config["simulation"]["num_cranes_range"] == [3, 6]
@@ -117,20 +118,30 @@ def test_simulate_dataset_outputs_formal_ids_and_window_scenario_uids() -> None:
     state_obs = pd.read_csv(output_dir / "tables" / "state_obs.csv")
     geometry_table = pd.read_csv(output_dir / "tables" / "geometry_table.csv")
     edge_current = pd.read_csv(output_dir / "tables" / "edge_current.csv")
+    edge_future_label = pd.read_csv(output_dir / "tables" / "edge_future_label.csv")
 
+    assert scenario_table.loc[0, "scenario_id"] == "scenario_000000"
     assert scenario_table.loc[0, "scenario_uid"] == "scenario_000000"
     assert scenario_table.loc[0, "scenario_index"] == 0
+    assert crane_static["crane_id"].map(lambda value: isinstance(value, str) and value.startswith("crane_")).all()
+    assert task_table["task_id"].map(lambda value: isinstance(value, str) and value.startswith("task_")).all()
     assert {"crane_uid", "crane_index"}.issubset(crane_static.columns)
     assert {"task_uid", "task_index"}.issubset(task_table.columns)
     assert {"scenario_uid", "crane_uid", "task_uid", "scenario_index", "crane_index", "task_index"}.issubset(state_true.columns)
     assert {"scenario_uid", "crane_uid", "task_uid", "scenario_index", "crane_index", "task_index"}.issubset(state_obs.columns)
     assert {"scenario_uid", "crane_uid", "scenario_index", "crane_index"}.issubset(geometry_table.columns)
     assert {"scenario_uid", "crane_i_uid", "crane_j_uid", "scenario_index", "crane_i_index", "crane_j_index"}.issubset(edge_current.columns)
+    assert edge_current["crane_i"].map(lambda value: isinstance(value, str) and value.startswith("crane_")).all()
+    assert edge_current["crane_j"].map(lambda value: isinstance(value, str) and value.startswith("crane_")).all()
+    assert edge_future_label["crane_i"].map(lambda value: isinstance(value, str) and value.startswith("crane_")).all()
+    assert edge_future_label["crane_j"].map(lambda value: isinstance(value, str) and value.startswith("crane_")).all()
 
     with np.load(output_dir / "windows" / "train_windows.npz", allow_pickle=False) as data:
         assert data["scenario_ids"].dtype.kind in {"i", "u"}
+        assert "scenario_indices" in data.files
+        assert "scenario_business_ids" in data.files
         assert "scenario_uids" in data.files
-        assert data["scenario_uids"].dtype.kind in {"U", "S"}
+        assert data["scenario_business_ids"].dtype.kind in {"U", "S"}
 
 
 def test_no_overlap_safe_scenarios_have_no_radius_overlap_or_are_relabelled() -> None:
@@ -160,8 +171,10 @@ def test_no_overlap_safe_scenarios_have_no_radius_overlap_or_are_relabelled() ->
     if scenario_table.loc[0, "scene_type"] == "no_overlap_safe":
         statics = [
             CraneStatic(
-                scenario_id=int(row["scenario_id"]),
-                crane_id=int(row["crane_id"]),
+                scenario_id=str(row["scenario_id"]),
+                scenario_index=int(row["scenario_index"]),
+                crane_id=str(row["crane_id"]),
+                crane_index=int(row["crane_index"]),
                 base_x=float(row["base_x"]),
                 base_y=float(row["base_y"]),
                 base_z=float(row["base_z"]),

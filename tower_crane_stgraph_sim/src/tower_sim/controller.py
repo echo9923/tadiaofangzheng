@@ -6,6 +6,7 @@ import numpy as np
 
 from tower_sim.dataclasses import Command, CraneState, CraneStatic, LiftingTask
 from tower_sim.geometry import wrap_to_pi
+from tower_sim.ids import task_id_from_index
 
 TASK_STAGES = (
     "move_to_pickup",
@@ -23,8 +24,8 @@ def choose_active_task(tasks: Sequence[LiftingTask], state: CraneState, timestam
 
     if not tasks:
         return None
-    task_by_id = {task.task_id: task for task in tasks}
-    task = task_by_id.get(state.task_id)
+    task_by_index = {task.task_index: task for task in tasks}
+    task = task_by_index.get(state.task_index)
     if task is None or timestamp < task.start_time:
         return None
     return task
@@ -64,8 +65,9 @@ def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolera
     if state.task_stage == "idle_or_next_task":
         state.task_stage = "move_to_pickup"
         state.load_weight = 0.0
-    if state.task_id != task.task_id:
+    if state.task_index != task.task_index:
         state.task_id = task.task_id
+        state.task_index = task.task_index
         state.task_stage = "move_to_pickup"
         state.load_weight = 0.0
 
@@ -93,7 +95,9 @@ def advance_task_stage(state: CraneState, task: LiftingTask | None, stage_tolera
     elif stage == "release_load":
         state.task_stage = "idle_or_next_task"
         state.load_weight = 0.0
-        state.task_id = state.task_id + 1
+        state.task_index = state.task_index + 1
+        if task is not None:
+            state.task_id = task_id_from_index(task.crane_index, state.task_index)
     return state
 
 

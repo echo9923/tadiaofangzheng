@@ -93,6 +93,19 @@ def write_optional_parquet(df: pd.DataFrame, path: str | Path) -> None:
         return
 
 
+def read_table(tables_dir: str | Path, name: str) -> pd.DataFrame:
+    """Read a generated table, preferring CSV and falling back to parquet."""
+
+    directory = Path(tables_dir)
+    csv_path = directory / f"{name}.csv"
+    if csv_path.exists():
+        return pd.read_csv(csv_path)
+    parquet_path = directory / f"{name}.parquet"
+    if parquet_path.exists():
+        return pd.read_parquet(parquet_path)
+    raise FileNotFoundError(f"Could not find {name}.csv or {name}.parquet in {directory}")
+
+
 def split_scenario_ids(
     scenario_ids: list[int],
     train_ratio: float,

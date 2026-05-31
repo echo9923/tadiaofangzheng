@@ -20,6 +20,7 @@ from tower_sim.controller import (
 from tower_sim.dataclasses import Command, CraneState, CraneStatic
 from tower_sim.dynamics import update_state
 from tower_sim.geometry import reconstruct_geometry
+from tower_sim.ids import crane_id_from_index, scenario_id_from_index, task_id_from_index
 from tower_sim.interaction import apply_avoidance, compute_edges_for_step
 from tower_sim.io_utils import dataset_paths, ensure_dataset_dirs, make_run_root, split_scenario_ids, write_csv, write_optional_parquet
 from tower_sim.labels import compute_future_labels
@@ -104,10 +105,16 @@ GEOMETRY_COLUMNS = [
 
 EDGE_COLUMNS = [
     "scenario_id",
+    "scenario_uid",
+    "scenario_index",
     "timestamp",
     "step",
     "crane_i",
     "crane_j",
+    "crane_i_uid",
+    "crane_j_uid",
+    "crane_i_index",
+    "crane_j_index",
     "d_arm_arm",
     "d_arm_hook_i_to_j",
     "d_arm_hook_j_to_i",
@@ -152,6 +159,7 @@ def _copy_state_with_stage(state: CraneState) -> CraneState:
         h_ddot=state.h_ddot,
         load_weight=state.load_weight,
         task_id=state.task_id,
+        task_index=state.task_index,
         task_stage=state.task_stage,
     )
 
@@ -169,40 +177,43 @@ def _initial_state(crane: CraneStatic, rng: np.random.Generator) -> CraneState:
         r_ddot=0.0,
         h_ddot=0.0,
         load_weight=0.0,
-        task_id=0,
+        task_id=task_id_from_index(crane.crane_index, 0),
+        task_index=0,
         task_stage="move_to_pickup",
     )
 
 
 def _scenario_uid(scenario_index: int) -> str:
-    return f"scenario_{scenario_index:06d}"
+    return scenario_id_from_index(scenario_index)
 
 
 def _crane_uid(crane_index: int) -> str:
-    return f"crane_{crane_index:02d}"
+    return crane_id_from_index(crane_index)
 
 
 def _task_uid(crane_index: int, task_index: int) -> str:
-    return f"task_{crane_index:02d}_{task_index:04d}"
+    return task_id_from_index(crane_index, task_index)
 
 
 def _state_row(
-    scenario_id: int,
+    scenario_index: int,
     timestamp: float,
     step: int,
-    crane_id: int,
+    crane_index: int,
     state: CraneState,
     command: Command,
 ) -> dict[str, Any]:
+    scenario_id = _scenario_uid(scenario_index)
+    crane_id = _crane_uid(crane_index)
     return {
         "scenario_id": scenario_id,
-        "scenario_uid": _scenario_uid(scenario_id),
-        "scenario_index": scenario_id,
+        "scenario_uid": scenario_id,
+        "scenario_index": scenario_index,
         "timestamp": timestamp,
         "step": step,
         "crane_id": crane_id,
-        "crane_uid": _crane_uid(crane_id),
-        "crane_index": crane_id,
+        "crane_uid": crane_id,
+        "crane_index": crane_index,
         "theta": state.theta,
         "r": state.r,
         "h": state.h,
@@ -219,23 +230,25 @@ def _state_row(
         "brake_flag": command.brake_flag,
         "emergency_flag": command.emergency_flag,
         "task_id": state.task_id,
-        "task_uid": _task_uid(crane_id, state.task_id),
-        "task_index": state.task_id,
+        "task_uid": state.task_id,
+        "task_index": state.task_index,
         "task_stage": state.task_stage,
     }
 
 
-def _geometry_row(scenario_id: int, timestamp: float, step: int, crane_id: int, static: CraneStatic, state: CraneState) -> dict[str, Any]:
+def _geometry_row(scenario_index: int, timestamp: float, step: int, crane_index: int, static: CraneStatic, state: CraneState) -> dict[str, Any]:
     geom = reconstruct_geometry(static, state)
+    scenario_id = _scenario_uid(scenario_index)
+    crane_id = _crane_uid(crane_index)
     return {
         "scenario_id": scenario_id,
-        "scenario_uid": _scenario_uid(scenario_id),
-        "scenario_index": scenario_id,
+        "scenario_uid": scenario_id,
+        "scenario_index": scenario_index,
         "timestamp": timestamp,
         "step": step,
         "crane_id": crane_id,
-        "crane_uid": _crane_uid(crane_id),
-        "crane_index": crane_id,
+        "crane_uid": crane_id,
+        "crane_index": crane_index,
         "root_x": geom.root[0],
         "root_y": geom.root[1],
         "root_z": geom.root[2],
@@ -257,7 +270,7 @@ All distances are in meters, time is in seconds, angular values are in radians, 
 
 `scenario_id`, `scenario_uid`, `scenario_index`, `scene_type`, `num_cranes`, `duration_s`, `dt`, `site_length_m`, `site_width_m`, `seed`, `split`, `layout_relabel_reason`.
 
-`scenario_uid` is the stable string business id, while `scenario_index` and legacy `scenario_id` are numeric indexes for tensor construction.
+`scenario_id` is the stable string business id. `scenario_uid` is a deprecated alias kept for compatibility. `scenario_index` is the numeric scenario index used for seeding, splitting, and tensor construction.
 
 ## crane_static.csv
 
@@ -293,7 +306,7 @@ Per-step reconstructed jib root, jib tip, and hook coordinates for every crane.
 
 `scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `crane_i`, `crane_j`, `crane_i_uid`, `crane_j_uid`, `crane_i_index`, `crane_j_index`, `d_arm_arm`, `d_arm_hook_i_to_j`, `d_arm_hook_j_to_i`, `d_hook_hook`, `delta_theta`, `delta_theta_dot`, `delta_r`, `delta_h`, `delta_tower_height`, `base_distance`, `overlap_ratio`, `relative_approach_speed`, `relative_approach_speed_arm_arm`, `relative_approach_speed_arm_hook`, `relative_approach_speed_hook_hook`, `ttc_est_arm_arm`, `ttc_est_arm_hook`, `ttc_est_hook_hook`, `same_height_risk_zone`.
 
-Current-time physical-prior edge features computed from current geometry and current relative motion. These fields are allowed as model inputs. `ttc_est_*` is current-state-only and is not a future label.
+Current-time physical-prior edge features computed from current geometry and current velocity extrapolation. These fields are allowed as model inputs. `ttc_est_*` is current-state-only and is not a future label. `same_height_risk_zone` means the two jib-root heights are close and the plan-view operating radii overlap; it is not a universal height-risk label for all risk types.
 
 ## edge_future_label.csv
 
@@ -360,28 +373,33 @@ def _write_readme_copy(output_path: Path) -> None:
 
 
 def _generate_validated_cranes(
-    scenario_id: int,
-    scene_type: str,
-    num_cranes: int,
-    config: dict[str, Any],
-    rng: np.random.Generator,
+    scenario_index: int | None = None,
+    scene_type: str = "",
+    num_cranes: int = 0,
+    config: dict[str, Any] | None = None,
+    rng: np.random.Generator | None = None,
     max_attempts: int = 100,
+    scenario_id: int | None = None,
 ) -> tuple[str, str, list[CraneStatic]]:
+    if scenario_index is None:
+        scenario_index = int(scenario_id if scenario_id is not None else 0)
+    if config is None or rng is None:
+        raise ValueError("config and rng are required")
     if scene_type != "no_overlap_safe":
-        return scene_type, "", generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
+        return scene_type, "", generate_cranes(scenario_index, scene_type, num_cranes, config, rng)
 
     for _ in range(max_attempts):
-        cranes = generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
+        cranes = generate_cranes(scenario_index, scene_type, num_cranes, config, rng)
         if not has_radius_overlap(cranes):
             return scene_type, "", cranes
 
     fallback_scene_type = "overlap_no_conflict"
-    cranes = generate_cranes(scenario_id, fallback_scene_type, num_cranes, config, rng)
+    cranes = generate_cranes(scenario_index, fallback_scene_type, num_cranes, config, rng)
     return fallback_scene_type, "no_overlap_infeasible", cranes
 
 
 def _simulate_one_scenario(
-    scenario_id: int,
+    scenario_index: int,
     scene_type: str,
     num_cranes: int,
     config: dict[str, Any],
@@ -392,17 +410,17 @@ def _simulate_one_scenario(
     duration = float(config["simulation"]["scenario_duration_s"])
     steps = int(round(duration / dt)) + 1
     if cranes is None:
-        cranes = generate_cranes(scenario_id, scene_type, num_cranes, config, rng)
-    tasks = generate_tasks(scenario_id, scene_type, cranes, config, rng)
-    tasks_by_crane = {crane.crane_id: [task for task in tasks if task.crane_id == crane.crane_id] for crane in cranes}
-    states = {crane.crane_id: _initial_state(crane, rng) for crane in cranes}
+        cranes = generate_cranes(scenario_index, scene_type, num_cranes, config, rng)
+    tasks = generate_tasks(scenario_index, scene_type, cranes, config, rng)
+    tasks_by_crane = {crane.crane_index: [task for task in tasks if task.crane_index == crane.crane_index] for crane in cranes}
+    states = {crane.crane_index: _initial_state(crane, rng) for crane in cranes}
     if scene_type in {"two_crane_crossing", "multi_crane_avoidance", "delayed_or_failed_avoidance"}:
         for crane in cranes:
-            first_tasks = tasks_by_crane.get(crane.crane_id, [])
+            first_tasks = tasks_by_crane.get(crane.crane_index, [])
             if not first_tasks:
                 continue
             task = first_tasks[0]
-            states[crane.crane_id] = CraneState(
+            states[crane.crane_index] = CraneState(
                 theta=task.pickup_theta,
                 r=task.pickup_r,
                 h=task.transport_h,
@@ -414,6 +432,7 @@ def _simulate_one_scenario(
                 h_ddot=0.0,
                 load_weight=task.load_weight,
                 task_id=task.task_id,
+                task_index=task.task_index,
                 task_stage="transport_to_dropoff",
             )
     prev_commands: dict[int, Command] = {}
@@ -423,37 +442,37 @@ def _simulate_one_scenario(
     geometry_rows: list[dict[str, Any]] = []
     edge_rows: list[dict[str, Any]] = []
 
-    static_by_id = {crane.crane_id: crane for crane in cranes}
+    static_by_id = {crane.crane_index: crane for crane in cranes}
     stage_tolerance = get_stage_tolerance(config["task_generation"])
     command_smoothing = get_command_smoothing(config["controller"])
     for step in range(steps):
         timestamp = step * dt
         commands: dict[int, Command] = {}
         staged_states: dict[int, CraneState] = {}
-        for crane_id, state in states.items():
+        for crane_index, state in states.items():
             current_state = _copy_state_with_stage(state)
-            task = choose_active_task(tasks_by_crane[crane_id], current_state, timestamp)
+            task = choose_active_task(tasks_by_crane[crane_index], current_state, timestamp)
             current_state = advance_task_stage(current_state, task, stage_tolerance)
             target = target_for_stage(task, current_state)
             command = make_nominal_command(
                 current_state,
-                static_by_id[crane_id],
+                static_by_id[crane_index],
                 target,
                 float(config["controller"]["k_theta"]),
                 float(config["controller"]["k_r"]),
                 float(config["controller"]["k_h"]),
             )
-            command = smooth_command(command, prev_commands.get(crane_id), command_smoothing)
-            staged_states[crane_id] = current_state
-            commands[crane_id] = command
+            command = smooth_command(command, prev_commands.get(crane_index), command_smoothing)
+            staged_states[crane_index] = current_state
+            commands[crane_index] = command
 
         commands = apply_avoidance(commands, cranes, staged_states, config, rng, dt, avoidance_delay_counters)
         next_states: dict[int, CraneState] = {}
-        for crane_id, current_state in staged_states.items():
+        for crane_index, current_state in staged_states.items():
             next_state = update_state(
                 current_state,
-                static_by_id[crane_id],
-                commands[crane_id],
+                static_by_id[crane_index],
+                commands[crane_index],
                 dt=dt,
                 h_clearance=2.0,
                 h_min=0.0,
@@ -461,10 +480,11 @@ def _simulate_one_scenario(
                 if bool(config["load_effect"].get("enabled", True))
                 else 1.0,
                 emergency_brake_scale=float(config.get("dynamics", {}).get("emergency_brake_scale", 2.0)),
+                normal_brake_scale=float(config.get("dynamics", {}).get("normal_brake_scale", 1.0)),
             )
-            next_states[crane_id] = next_state
-            state_rows.append(_state_row(scenario_id, timestamp, step, crane_id, next_state, commands[crane_id]))
-            geometry_rows.append(_geometry_row(scenario_id, timestamp, step, crane_id, static_by_id[crane_id], next_state))
+            next_states[crane_index] = next_state
+            state_rows.append(_state_row(scenario_index, timestamp, step, crane_index, next_state, commands[crane_index]))
+            geometry_rows.append(_geometry_row(scenario_index, timestamp, step, crane_index, static_by_id[crane_index], next_state))
 
         geometries = {cid: reconstruct_geometry(static_by_id[cid], state) for cid, state in next_states.items()}
         pair_rows, prev_pair_min = compute_edges_for_step(
@@ -476,7 +496,18 @@ def _simulate_one_scenario(
             thresholds=config["risk_thresholds"],
         )
         for row in pair_rows:
-            edge_rows.append({"scenario_id": scenario_id, "timestamp": timestamp, "step": step, **row})
+            edge_rows.append(
+                {
+                    "scenario_id": _scenario_uid(scenario_index),
+                    "scenario_uid": _scenario_uid(scenario_index),
+                    "scenario_index": scenario_index,
+                    "timestamp": timestamp,
+                    "step": step,
+                    "crane_i_uid": row["crane_i"],
+                    "crane_j_uid": row["crane_j"],
+                    **row,
+                }
+            )
         states = next_states
         prev_commands = commands
     return [asdict(c) for c in cranes], [asdict(t) for t in tasks], state_rows, geometry_rows, edge_rows
@@ -508,20 +539,20 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     geometry_rows: list[dict[str, Any]] = []
     edge_rows: list[dict[str, Any]] = []
 
-    for scenario_id in _progress(range(num_scenarios), desc="scenarios"):
-        seed = scenario_seed(base_seed, scenario_id)
+    for scenario_index in _progress(range(num_scenarios), desc="scenarios"):
+        seed = scenario_seed(base_seed, scenario_index)
         rng = np.random.default_rng(seed)
         scene_type = sample_scene_type(rng, config["layout"]["overlap_scene_ratio"])
         num_cranes = _num_cranes_for_scene(scene_type, num_min, num_max, rng)
         scene_type, layout_relabel_reason, crane_objects = _generate_validated_cranes(
-            scenario_id,
+            scenario_index,
             scene_type,
             num_cranes,
             config,
             rng,
         )
         cranes, tasks, states, geometries, edges = _simulate_one_scenario(
-            scenario_id,
+            scenario_index,
             scene_type,
             num_cranes,
             config,
@@ -529,11 +560,12 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
             cranes=crane_objects,
         )
         site_length, site_width = config["layout"]["site_size_m"]
+        scenario_id = _scenario_uid(scenario_index)
         scenario_rows.append(
             {
                 "scenario_id": scenario_id,
-                "scenario_uid": _scenario_uid(scenario_id),
-                "scenario_index": scenario_id,
+                "scenario_uid": scenario_id,
+                "scenario_index": scenario_index,
                 "scene_type": scene_type,
                 "num_cranes": len(crane_objects),
                 "duration_s": float(config["simulation"]["scenario_duration_s"]),
@@ -541,7 +573,7 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
                 "site_length_m": float(site_length),
                 "site_width_m": float(site_width),
                 "seed": seed,
-                "split": split_assignments[scenario_id],
+                "split": split_assignments[scenario_index],
                 "layout_relabel_reason": layout_relabel_reason,
             }
         )
@@ -555,27 +587,19 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     crane_static = pd.DataFrame(crane_rows)
     task_table = pd.DataFrame(task_rows)
     if not crane_static.empty:
-        crane_static["scenario_uid"] = crane_static["scenario_id"].map(_scenario_uid)
-        crane_static["scenario_index"] = crane_static["scenario_id"]
-        crane_static["crane_uid"] = crane_static["crane_id"].map(_crane_uid)
-        crane_static["crane_index"] = crane_static["crane_id"]
+        crane_static["scenario_uid"] = crane_static["scenario_id"]
+        crane_static["crane_uid"] = crane_static["crane_id"]
     if not task_table.empty:
-        task_table["scenario_uid"] = task_table["scenario_id"].map(_scenario_uid)
-        task_table["scenario_index"] = task_table["scenario_id"]
-        task_table["crane_uid"] = task_table["crane_id"].map(_crane_uid)
-        task_table["crane_index"] = task_table["crane_id"]
-        task_table["task_uid"] = [_task_uid(int(row["crane_id"]), int(row["task_id"])) for _, row in task_table.iterrows()]
-        task_table["task_index"] = task_table["task_id"]
+        task_table["scenario_uid"] = task_table["scenario_id"]
+        task_table["crane_uid"] = task_table["crane_id"]
+        task_table["task_uid"] = task_table["task_id"]
     state_true = pd.DataFrame(state_rows, columns=STATE_COLUMNS)
     geometry_table = pd.DataFrame(geometry_rows, columns=GEOMETRY_COLUMNS)
     edge_current = pd.DataFrame(edge_rows, columns=EDGE_COLUMNS)
     if not edge_current.empty:
-        edge_current["scenario_uid"] = edge_current["scenario_id"].map(_scenario_uid)
-        edge_current["scenario_index"] = edge_current["scenario_id"]
-        edge_current["crane_i_uid"] = edge_current["crane_i"].map(_crane_uid)
-        edge_current["crane_j_uid"] = edge_current["crane_j"].map(_crane_uid)
-        edge_current["crane_i_index"] = edge_current["crane_i"]
-        edge_current["crane_j_index"] = edge_current["crane_j"]
+        edge_current["scenario_uid"] = edge_current["scenario_id"]
+        edge_current["crane_i_uid"] = edge_current["crane_i"]
+        edge_current["crane_j_uid"] = edge_current["crane_j"]
     obs_rng = np.random.default_rng(scenario_seed(base_seed, 0, stream=9))
     state_obs = generate_observations(state_true, config, obs_rng)
     horizons_s = [float(x) for x in config["windowing"].get("prediction_horizons_s", [config["windowing"]["prediction_horizon_s"]])]
@@ -587,12 +611,9 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         thresholds=config["risk_thresholds"],
     )
     if not edge_future_label.empty:
-        edge_future_label["scenario_uid"] = edge_future_label["scenario_id"].map(_scenario_uid)
-        edge_future_label["scenario_index"] = edge_future_label["scenario_id"]
-        edge_future_label["crane_i_uid"] = edge_future_label["crane_i"].map(_crane_uid)
-        edge_future_label["crane_j_uid"] = edge_future_label["crane_j"].map(_crane_uid)
-        edge_future_label["crane_i_index"] = edge_future_label["crane_i"]
-        edge_future_label["crane_j_index"] = edge_future_label["crane_j"]
+        edge_future_label["scenario_uid"] = edge_future_label["scenario_id"]
+        edge_future_label["crane_i_uid"] = edge_future_label["crane_i"]
+        edge_future_label["crane_j_uid"] = edge_future_label["crane_j"]
 
     save_formats = _configured_save_formats(config)
     _write_table(scenario_table, paths.tables, "scenario_table", save_formats)

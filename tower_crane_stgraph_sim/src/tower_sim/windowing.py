@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from tower_sim.ids import crane_index_from_id, crane_key, scenario_id_from_index, scenario_index_from_id, scenario_key
+
 NODE_FEATURE_NAMES = [
     "sin_theta",
     "cos_theta",
@@ -158,9 +160,34 @@ def _empty_npz(path: Path) -> None:
         y_risk_feature_names=np.array(Y_RISK_FEATURE_NAMES),
         y_min_distance_feature_names=np.array(Y_MIN_DISTANCE_FEATURE_NAMES),
         scenario_ids=np.array([], dtype=np.int32),
+        scenario_indices=np.array([], dtype=np.int32),
+        scenario_business_ids=np.array([], dtype="<U1"),
         scenario_uids=np.array([], dtype="<U1"),
         window_start_steps=np.array([], dtype=np.int32),
     )
+
+
+def _with_index_columns(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    if "scenario_index" not in result.columns and "scenario_id" in result.columns:
+        result["scenario_index"] = result["scenario_id"].map(scenario_index_from_id)
+    if "crane_index" not in result.columns and "crane_id" in result.columns:
+        result["crane_index"] = result["crane_id"].map(crane_index_from_id)
+    if "crane_i_index" not in result.columns and "crane_i" in result.columns:
+        result["crane_i_index"] = result["crane_i"].map(crane_index_from_id)
+    if "crane_j_index" not in result.columns and "crane_j" in result.columns:
+        result["crane_j_index"] = result["crane_j"].map(crane_index_from_id)
+    return result
+
+
+def _business_scenario_id(row: pd.Series) -> str:
+    value = row.get("scenario_id", None)
+    if isinstance(value, str) and value.startswith("scenario_"):
+        return value
+    value = row.get("scenario_uid", None)
+    if isinstance(value, str) and value.startswith("scenario_"):
+        return value
+    return scenario_id_from_index(int(row["scenario_index"]))
 
 
 def make_windows(
@@ -185,44 +212,50 @@ def make_windows(
     stride = max(1, int(round(float(win_cfg["stride_s"]) / dt)))
     n_max = int(win_cfg["max_cranes"])
     horizon_s = float(win_cfg["prediction_horizon_s"])
+    scenario_table = _with_index_columns(scenario_table)
+    state_obs = _with_index_columns(state_obs)
+    state_true = _with_index_columns(state_true)
+    crane_static = _with_index_columns(crane_static)
+    edge_current = _with_index_columns(edge_current)
+    edge_future_label = _with_index_columns(edge_future_label)
 
     configured_splits = ["train", "val", "test"]
     if bool(config.get("split", {}).get("add_generalization_test", False)):
         configured_splits.append("generalization")
     samples: dict[str, list[dict[str, Any]]] = {split: [] for split in configured_splits}
-    split_by_scenario = {int(row["scenario_id"]): str(row["split"]) for _, row in scenario_table.iterrows()}
+    split_by_scenario = {int(row["scenario_index"]): str(row["split"]) for _, row in scenario_table.iterrows()}
     uid_by_scenario = {
-        int(row["scenario_id"]): str(row.get("scenario_uid", f"scenario_{int(row['scenario_id']):06d}"))
+        int(row["scenario_index"]): _business_scenario_id(row)
         for _, row in scenario_table.iterrows()
     }
-    static_by_scenario = {sid: g.set_index("crane_id") for sid, g in crane_static.groupby("scenario_id")}
+    static_by_scenario = {int(sid): g.set_index("crane_index") for sid, g in crane_static.groupby("scenario_index")}
     obs_by_key = {
-        (int(row["scenario_id"]), int(row["step"]), int(row["crane_id"])): row
+        (scenario_key(row), int(row["step"]), crane_key(row)): row
         for _, row in state_obs.iterrows()
     }
     true_by_key = {
-        (int(row["scenario_id"]), int(row["step"]), int(row["crane_id"])): row
+        (scenario_key(row), int(row["step"]), crane_key(row)): row
         for _, row in state_true.iterrows()
     }
     edge_by_key = {
-        (int(row["scenario_id"]), int(row["step"]), int(row["crane_i"]), int(row["crane_j"])): row
+        (scenario_key(row), int(row["step"]), int(row["crane_i_index"]), int(row["crane_j_index"])): row
         for _, row in edge_current.iterrows()
     }
     label_main = edge_future_label[edge_future_label["horizon_s"] == horizon_s]
     if label_main.empty:
         label_main = edge_future_label.copy()
     label_by_key = {
-        (int(row["scenario_id"]), int(row["step"]), int(row["crane_i"]), int(row["crane_j"])): row
+        (scenario_key(row), int(row["step"]), int(row["crane_i_index"]), int(row["crane_j_index"])): row
         for _, row in label_main.iterrows()
     }
 
-    for scenario_id, group in state_obs.groupby("scenario_id"):
+    for scenario_id, group in state_obs.groupby("scenario_index"):
         sid = int(scenario_id)
         split = split_by_scenario.get(sid, "train")
         steps = sorted(int(x) for x in group["step"].unique())
         if not steps:
             continue
-        crane_ids = sorted(int(x) for x in group["crane_id"].unique())[:n_max]
+        crane_ids = sorted(int(x) for x in group["crane_index"].unique())[:n_max]
         id_to_idx = {cid: idx for idx, cid in enumerate(crane_ids)}
         static_index = static_by_scenario[sid]
         max_start = max(steps) - t_in - h_steps + 1
@@ -281,7 +314,8 @@ def make_windows(
                     "y_risk": y_risk,
                     "y_min_distance": y_dist,
                     "scenario_id": sid,
-                    "scenario_uid": uid_by_scenario.get(sid, f"scenario_{sid:06d}"),
+                    "scenario_business_id": uid_by_scenario.get(sid, scenario_id_from_index(sid)),
+                    "scenario_uid": uid_by_scenario.get(sid, scenario_id_from_index(sid)),
                     "window_start_step": start,
                 }
             )
@@ -309,6 +343,8 @@ def make_windows(
             y_risk_feature_names=np.array(Y_RISK_FEATURE_NAMES),
             y_min_distance_feature_names=np.array(Y_MIN_DISTANCE_FEATURE_NAMES),
             scenario_ids=np.array([s["scenario_id"] for s in split_samples], dtype=np.int32),
+            scenario_indices=np.array([s["scenario_id"] for s in split_samples], dtype=np.int32),
+            scenario_business_ids=np.array([s["scenario_business_id"] for s in split_samples]),
             scenario_uids=np.array([s["scenario_uid"] for s in split_samples]),
             window_start_steps=np.array([s["window_start_step"] for s in split_samples], dtype=np.int32),
         )

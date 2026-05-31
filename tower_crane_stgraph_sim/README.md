@@ -39,6 +39,8 @@ python scripts/run_simulation.py --config configs/default.yaml --num-scenarios 2
 
 The script writes each generation under `project.output_dir/run_YYYYMMDD_HHMMSS/`. Pass `--run-id` when you want a reproducible run directory name. The script prints the resolved output directory and key quality statistics after generation.
 
+`configs/default.yaml` is a medium default configuration. Use `configs/debug_small.yaml` or `configs/debug_fast.yaml` for quick checks, and `configs/full_large.yaml` for long-running 300/1000-scenario formal experiments.
+
 ## Configuration
 
 The YAML configuration controls:
@@ -82,7 +84,7 @@ Each run writes these files under the generated run directory:
 - `quality/feature_summary.csv`: numeric feature summary statistics for state, edge, and label tables
 - `quality/plots/*.png`: diagnostic figures
 
-Tables include both stable string business IDs such as `scenario_000000`, `crane_00`, and `task_00_0000`, plus numeric `*_index` fields used for tensor construction. Existing numeric `scenario_id`, `crane_id`, and `task_id` columns remain for backward compatibility.
+Tables use stable string business IDs such as `scenario_000000`, `crane_00`, and `task_00_0000` in `scenario_id`, `crane_id`, and `task_id`. Numeric `*_index` fields are used for seeding, splitting, joins, and tensor construction. `scenario_uid`, `crane_uid`, and `task_uid` are deprecated aliases retained for compatibility.
 
 ## Sliding Window Tensors
 
@@ -105,7 +107,7 @@ Feature-name arrays are stored in every npz:
 - `y_risk_feature_names`
 - `y_min_distance_feature_names`
 
-Window files also include integer `scenario_ids` for existing training code and string `scenario_uids` for schema-level traceability.
+Window files include integer `scenario_ids` and `scenario_indices` for existing training code, plus string `scenario_business_ids` and `scenario_uids` for schema-level traceability.
 
 Node inputs use `sin(theta)` and `cos(theta)` rather than raw `theta` to avoid angle wrap discontinuity.
 
@@ -114,7 +116,7 @@ Node inputs use `sin(theta)` and `cos(theta)` rather than raw `theta` to avoid a
 The implementation follows these rules:
 
 - Future minimum distances and risk labels are never input features.
-- `ttc_est_*` edge features are estimated from current distance and current relative approach speed only.
+- `ttc_est_*` edge features are estimated from current distance and current-state constant-velocity extrapolated approach speed only.
 - Train/validation/test splits are made by `scenario_id`, never by random windows.
 - `state_obs.csv` is the node-input source.
 - `state_true.csv` and `edge_future_label.csv` are used for labels.
@@ -135,6 +137,8 @@ outputs/debug_small/run_YYYYMMDD_HHMMSS/quality/quality_report.md
 ```
 
 The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, split exclusivity, leakage checks, tail-label `inf` checks, no-overlap consistency checks, seed, and `config_used.yaml` path. The generator also writes `risk_ratio_by_scenario.csv` and `feature_summary.csv` in the same quality directory.
+
+`same_height_risk_zone` is an edge feature indicating close jib-root heights together with plan-view operating-radius overlap. It is not a universal height-risk label for arm-hook or hook-hook risk.
 
 Quality plots are written to:
 
@@ -179,7 +183,7 @@ They avoid discontinuity around `0` and `2*pi`.
 
 **Can I generate parquet instead of CSV?**
 
-Yes. Set `simulation.save_format` to include `parquet`; CSV remains supported, and windows are always written as `.npz`.
+Yes. Set `simulation.save_format` to include `parquet`. Downstream scripts read CSV first and fall back to Parquet when CSV is absent. Windows are always written as `.npz`; `npz` in `save_format` documents that window output is part of the run, not a table format.
 
 **Does `emergency_flag` change the motion?**
 

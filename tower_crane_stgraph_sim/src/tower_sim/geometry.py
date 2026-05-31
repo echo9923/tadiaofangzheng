@@ -153,5 +153,6 @@ def constant_velocity_extrapolate(state: CraneState, horizon_s: float) -> CraneS
         h_ddot=0.0,
         load_weight=state.load_weight,
         task_id=state.task_id,
+        task_index=state.task_index,
         task_stage=state.task_stage,
     )

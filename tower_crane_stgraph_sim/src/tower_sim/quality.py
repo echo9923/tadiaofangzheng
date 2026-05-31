@@ -81,7 +81,7 @@ def _risk_ratio_by_scenario(edge_future_label: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     if "scenario_uid" not in summary.columns:
-        summary["scenario_uid"] = summary["scenario_id"].map(lambda x: f"scenario_{int(x):06d}")
+        summary["scenario_uid"] = summary["scenario_id"].astype(str)
     return summary[columns]
 
 
@@ -135,9 +135,10 @@ def generate_quality_report(
     sample_scene_topview(crane_static, geometry_table, plots_dir / "sample_scene_topview.png")
     sample_time_series(state_true, plots_dir / "sample_time_series.png")
 
-    train_ids = scenario_table[scenario_table["split"] == "train"]["scenario_id"].to_numpy()
-    val_ids = scenario_table[scenario_table["split"] == "val"]["scenario_id"].to_numpy()
-    test_ids = scenario_table[scenario_table["split"] == "test"]["scenario_id"].to_numpy()
+    split_key = "scenario_index" if "scenario_index" in scenario_table.columns else "scenario_id"
+    train_ids = scenario_table[scenario_table["split"] == "train"][split_key].to_numpy()
+    val_ids = scenario_table[scenario_table["split"] == "val"][split_key].to_numpy()
+    test_ids = scenario_table[scenario_table["split"] == "test"][split_key].to_numpy()
     split_ok = True
     try:
         validate_split_disjoint(train_ids, val_ids, test_ids)
@@ -155,7 +156,8 @@ def generate_quality_report(
     speed_out = False
     acc_out = False
     if not state_true.empty and not crane_static.empty:
-        merged = state_true.merge(crane_static, on=["scenario_id", "crane_id"], how="left")
+        merge_keys = ["scenario_index", "crane_index"] if {"scenario_index", "crane_index"}.issubset(state_true.columns) else ["scenario_id", "crane_id"]
+        merged = state_true.merge(crane_static, on=merge_keys, how="left", suffixes=("", "_static"))
         r_out = bool(((merged["r"] < merged["min_radius"] - 1e-6) | (merged["r"] > merged["max_radius"] + 1e-6)).any())
         h_out = bool(((merged["h"] < -1e-6) | (merged["h"] > merged["tower_height"] - 2.0 + 1e-6)).any())
         speed_out = bool(

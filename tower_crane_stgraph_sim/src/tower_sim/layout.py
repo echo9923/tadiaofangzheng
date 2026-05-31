@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from tower_sim.dataclasses import CraneStatic
+from tower_sim.ids import crane_id_from_index, scenario_id_from_index
 
 SCENE_TYPES = (
     "no_overlap_safe",
@@ -79,7 +80,7 @@ def _sample_base_positions(
 
 
 def generate_cranes(
-    scenario_id: int,
+    scenario_index: int,
     scene_type: str,
     num_cranes: int,
     config: dict[str, Any],
@@ -101,7 +102,8 @@ def generate_cranes(
     )
     cranes: list[CraneStatic] = []
     clustered_tower_height = _uniform_range(rng, crane_cfg["tower_height_range_m"])
-    for crane_id, (base_x, base_y) in enumerate(bases):
+    scenario_id = scenario_id_from_index(scenario_index)
+    for crane_index, (base_x, base_y) in enumerate(bases):
         if scene_type in {"two_crane_crossing", "multi_crane_avoidance", "delayed_or_failed_avoidance"}:
             tower_height = float(
                 np.clip(
@@ -119,7 +121,9 @@ def generate_cranes(
         cranes.append(
             CraneStatic(
                 scenario_id=scenario_id,
-                crane_id=crane_id,
+                scenario_index=scenario_index,
+                crane_id=crane_id_from_index(crane_index),
+                crane_index=crane_index,
                 base_x=base_x,
                 base_y=base_y,
                 base_z=0.0,
@@ -137,7 +141,7 @@ def generate_cranes(
                 max_h_acc=_uniform_range(rng, motion_cfg["max_h_acc_range_m_s2"]),
                 response_tau=_uniform_range(rng, motion_cfg["response_tau_s_range"]),
                 load_capacity=_uniform_range(rng, crane_cfg["load_capacity_range_kg"]),
-                priority=int(num_cranes - crane_id),
+                priority=int(num_cranes - crane_index),
             )
         )
     return cranes

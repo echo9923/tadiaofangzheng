@@ -45,7 +45,7 @@ def test_release_load_advances_to_next_task_id() -> None:
 
     assert updated.task_stage == "idle_or_next_task"
     assert updated.load_weight == 0.0
-    assert updated.task_id == 1
+    assert updated.task_index == 1
 
 
 def test_choose_active_task_uses_current_task_id_not_any_started_task() -> None:

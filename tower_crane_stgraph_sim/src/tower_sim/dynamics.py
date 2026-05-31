@@ -43,6 +43,7 @@ def update_state(
     h_min: float = 0.0,
     min_acc_scale: float = 0.5,
     emergency_brake_scale: float = 2.0,
+    normal_brake_scale: float = 1.0,
 ) -> CraneState:
     """Advance one crane state by one kinematic time step."""
 
@@ -50,11 +51,22 @@ def update_state(
     theta_cmd = command.theta_dot_cmd
     r_cmd = command.r_dot_cmd
     h_cmd = command.h_dot_cmd
+    if state.r <= static.min_radius and r_cmd < 0.0:
+        r_cmd = 0.0
+    elif state.r >= static.max_radius and r_cmd > 0.0:
+        r_cmd = 0.0
+    h_upper = static.tower_height - h_clearance
+    if state.h <= h_min and h_cmd < 0.0:
+        h_cmd = 0.0
+    elif state.h >= h_upper and h_cmd > 0.0:
+        h_cmd = 0.0
     if command.emergency_flag:
         theta_cmd = 0.0
         r_cmd = 0.0
         h_cmd = 0.0
         scale *= max(1.0, float(emergency_brake_scale))
+    elif command.brake_flag:
+        scale *= max(1.0, float(normal_brake_scale))
     theta_dot, theta_ddot = _limit_axis_velocity(
         state.theta_dot,
         theta_cmd,
@@ -86,26 +98,13 @@ def update_state(
 
     if r < static.min_radius:
         r = static.min_radius
-        if r_dot < 0.0:
-            r_dot = 0.0
-            r_ddot = (r_dot - state.r_dot) / dt
     elif r > static.max_radius:
         r = static.max_radius
-        if r_dot > 0.0:
-            r_dot = 0.0
-            r_ddot = (r_dot - state.r_dot) / dt
 
-    h_upper = static.tower_height - h_clearance
     if h < h_min:
         h = h_min
-        if h_dot < 0.0:
-            h_dot = 0.0
-            h_ddot = (h_dot - state.h_dot) / dt
     elif h > h_upper:
         h = h_upper
-        if h_dot > 0.0:
-            h_dot = 0.0
-            h_ddot = (h_dot - state.h_dot) / dt
 
     return CraneState(
         theta=theta,
@@ -119,6 +118,7 @@ def update_state(
         h_ddot=h_ddot,
         load_weight=state.load_weight,
         task_id=state.task_id,
+        task_index=state.task_index,
         task_stage=state.task_stage,
     )
 

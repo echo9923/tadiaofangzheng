@@ -66,12 +66,12 @@ def sample_scene_topview(crane_static: pd.DataFrame, geometry_table: pd.DataFram
     if plt is None or crane_static.empty or geometry_table.empty:
         _write_placeholder_png(output)
         return
-    scenario_id = int(crane_static["scenario_id"].iloc[0])
+    scenario_id = crane_static["scenario_id"].iloc[0]
     static = crane_static[crane_static["scenario_id"] == scenario_id]
     geom = geometry_table[(geometry_table["scenario_id"] == scenario_id) & (geometry_table["step"] == 0)]
     fig, ax = plt.subplots(figsize=(6, 6))
     for _, row in static.iterrows():
-        ax.scatter(row["base_x"], row["base_y"], s=60, label=f"crane {int(row['crane_id'])}")
+        ax.scatter(row["base_x"], row["base_y"], s=60, label=f"crane {row['crane_id']}")
         circle = plt.Circle((row["base_x"], row["base_y"]), row["max_radius"], fill=False, alpha=0.25)
         ax.add_patch(circle)
     for _, row in geom.iterrows():
@@ -96,8 +96,8 @@ def sample_time_series(state_true: pd.DataFrame, path: str | Path) -> None:
     if plt is None or state_true.empty:
         _write_placeholder_png(output)
         return
-    scenario_id = int(state_true["scenario_id"].iloc[0])
-    crane_id = int(state_true[state_true["scenario_id"] == scenario_id]["crane_id"].iloc[0])
+    scenario_id = state_true["scenario_id"].iloc[0]
+    crane_id = state_true[state_true["scenario_id"] == scenario_id]["crane_id"].iloc[0]
     data = state_true[(state_true["scenario_id"] == scenario_id) & (state_true["crane_id"] == crane_id)]
     fig, axes = plt.subplots(3, 1, figsize=(8, 6), sharex=True)
     for ax, col in zip(axes, ["theta", "r", "h"], strict=True):

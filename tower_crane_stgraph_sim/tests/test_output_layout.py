@@ -4,8 +4,9 @@ import uuid
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from tower_sim.io_utils import dataset_paths, make_run_root, read_table, split_scenario_ids
+from tower_sim.io_utils import dataset_paths, make_run_root, read_table, split_scenario_ids, write_optional_parquet
 from tower_sim.windowing import make_windows
 
 
@@ -216,6 +217,29 @@ def test_read_table_prefers_csv_and_falls_back_to_parquet() -> None:
     parquet_data.to_parquet(output_dir / "sample.parquet", index=False)
 
     assert read_table(output_dir, "sample").loc[0, "value"] == 2
+
+
+def test_write_optional_parquet_reports_non_required_failures(monkeypatch) -> None:
+    def fail_to_parquet(self, path, index=False):
+        raise RuntimeError("parquet unavailable")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_to_parquet)
+
+    result = write_optional_parquet(pd.DataFrame([{"value": 1}]), Path("test_artifacts") / "missing.parquet")
+
+    assert result["written"] is False
+    assert result["path"].endswith("missing.parquet")
+    assert result["error"]
+
+
+def test_write_optional_parquet_raises_when_required(monkeypatch) -> None:
+    def fail_to_parquet(self, path, index=False):
+        raise RuntimeError("parquet unavailable")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_to_parquet)
+
+    with pytest.raises(RuntimeError, match="Failed to write parquet"):
+        write_optional_parquet(pd.DataFrame([{"value": 1}]), Path("test_artifacts") / "missing.parquet", required=True)
 
 
 def test_make_windows_accepts_string_business_ids_and_numeric_indexes() -> None:

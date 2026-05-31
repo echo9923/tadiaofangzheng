@@ -82,15 +82,20 @@ def write_csv(df: pd.DataFrame, path: str | Path) -> None:
     df.to_csv(output_path, index=False, encoding="utf-8")
 
 
-def write_optional_parquet(df: pd.DataFrame, path: str | Path) -> None:
-    """Write parquet when pyarrow is installed, otherwise silently skip."""
+def write_optional_parquet(df: pd.DataFrame, path: str | Path, required: bool = False) -> dict[str, Any]:
+    """Write parquet and report whether the optional write succeeded."""
 
+    output_path = Path(path)
     try:
         import pyarrow  # noqa: F401
 
-        df.to_parquet(path, index=False)
-    except Exception:
-        return
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(output_path, index=False)
+        return {"written": True, "path": str(output_path), "error": None}
+    except Exception as exc:
+        if required:
+            raise RuntimeError(f"Failed to write parquet: {output_path}") from exc
+        return {"written": False, "path": str(output_path), "error": str(exc)}
 
 
 def read_table(tables_dir: str | Path, name: str) -> pd.DataFrame:

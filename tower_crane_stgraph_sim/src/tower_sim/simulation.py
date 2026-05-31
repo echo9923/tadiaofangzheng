@@ -352,11 +352,12 @@ def _configured_save_formats(config: dict[str, Any]) -> set[str]:
     return formats
 
 
-def _write_table(df: pd.DataFrame, tables_dir: Path, name: str, save_formats: set[str]) -> None:
+def _write_table(df: pd.DataFrame, tables_dir: Path, name: str, save_formats: set[str]) -> dict[str, Any] | None:
     if "csv" in save_formats:
         write_csv(df, tables_dir / f"{name}.csv")
     if "parquet" in save_formats:
-        write_optional_parquet(df, tables_dir / f"{name}.parquet")
+        return write_optional_parquet(df, tables_dir / f"{name}.parquet", required=False)
+    return None
 
 
 def _num_cranes_for_scene(scene_type: str, num_min: int, num_max: int, rng: np.random.Generator) -> int:
@@ -616,14 +617,21 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         edge_future_label["crane_j_uid"] = edge_future_label["crane_j"]
 
     save_formats = _configured_save_formats(config)
-    _write_table(scenario_table, paths.tables, "scenario_table", save_formats)
-    _write_table(crane_static, paths.tables, "crane_static", save_formats)
-    _write_table(task_table, paths.tables, "task_table", save_formats)
-    _write_table(state_true, paths.tables, "state_true", save_formats)
-    _write_table(state_obs, paths.tables, "state_obs", save_formats)
-    _write_table(geometry_table, paths.tables, "geometry_table", save_formats)
-    _write_table(edge_current, paths.tables, "edge_current", save_formats)
-    _write_table(edge_future_label, paths.tables, "edge_future_label", save_formats)
+    parquet_tables: dict[str, Any] = {}
+    tables_to_write = {
+        "scenario_table": scenario_table,
+        "crane_static": crane_static,
+        "task_table": task_table,
+        "state_true": state_true,
+        "state_obs": state_obs,
+        "geometry_table": geometry_table,
+        "edge_current": edge_current,
+        "edge_future_label": edge_future_label,
+    }
+    for table_name, table in tables_to_write.items():
+        parquet_result = _write_table(table, paths.tables, table_name, save_formats)
+        if parquet_result is not None:
+            parquet_tables[table_name] = parquet_result
 
     window_counts = make_windows(
         state_obs,
@@ -647,6 +655,9 @@ def simulate_dataset(config: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
                 "tables_dir": str(paths.tables),
                 "windows_dir": str(paths.windows),
                 "quality_dir": str(paths.quality),
+                "save_formats": sorted(save_formats),
+                "parquet_written": bool(parquet_tables) and all(bool(item.get("written", False)) for item in parquet_tables.values()),
+                "parquet_tables": parquet_tables,
             },
             ensure_ascii=False,
             indent=2,

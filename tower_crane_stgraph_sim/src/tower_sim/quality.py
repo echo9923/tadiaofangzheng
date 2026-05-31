@@ -18,7 +18,8 @@ def enforce_quality_gates(stats: dict[str, Any], config: dict[str, Any]) -> None
         raise ValueError("NaN found in required fields")
     if bool(qc.get("fail_on_future_leakage", False)) and bool(stats.get("future_leakage", False)):
         raise ValueError("Future leakage detected")
-    if "target_risk_ratio_range" in qc and not bool(stats.get("risk_ratio_in_target_range", True)):
+    fail_on_risk_ratio = bool(qc.get("fail_on_risk_ratio_out_of_range", "target_risk_ratio_range" in qc))
+    if fail_on_risk_ratio and "target_risk_ratio_range" in qc and not bool(stats.get("risk_ratio_in_target_range", True)):
         low, high = [float(x) for x in qc["target_risk_ratio_range"]]
         raise ValueError(f"risk_any_ratio={float(stats.get('risk_any_ratio', 0.0)):.4f} outside [{low}, {high}]")
     gate_failures = [
@@ -168,8 +169,10 @@ def generate_quality_report(
             ).any()
         )
         emergency_scale = max(1.0, float(config.get("dynamics", {}).get("emergency_brake_scale", 2.0)))
+        normal_scale = max(1.0, float(config.get("dynamics", {}).get("normal_brake_scale", 1.0)))
         emergency_flag = pd.to_numeric(merged["emergency_flag"], errors="coerce").fillna(0)
-        acc_scale = np.where(emergency_flag > 0, emergency_scale, 1.0)
+        brake_flag = pd.to_numeric(merged["brake_flag"], errors="coerce").fillna(0)
+        acc_scale = np.where(emergency_flag > 0, emergency_scale, np.where(brake_flag > 0, normal_scale, 1.0))
         acc_out = bool(
             (
                 (merged["theta_ddot"].abs() > merged["max_theta_acc"] * acc_scale + 1e-6)

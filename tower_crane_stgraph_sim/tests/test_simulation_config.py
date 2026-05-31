@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import numpy as np
@@ -47,6 +48,7 @@ def test_two_crane_crossing_respects_minimum_three_cranes_when_configured() -> N
 
 def test_transport_height_ratio_accepts_configured_range() -> None:
     config = {
+        "simulation": {"scenario_duration_s": 120.0},
         "task_generation": {
             "tasks_per_crane_range": [1, 1],
             "pickup_height_range_m": [2.0, 2.0],
@@ -62,6 +64,30 @@ def test_transport_height_ratio_accepts_configured_range() -> None:
     assert 55.0 <= tasks[0].transport_h <= 85.0
 
 
+def test_task_start_times_are_distributed_over_scenario_duration_and_sorted_per_crane() -> None:
+    config = {
+        "simulation": {"scenario_duration_s": 900.0},
+        "task_generation": {
+            "tasks_per_crane_range": [4, 4],
+            "pickup_height_range_m": [2.0, 2.0],
+            "dropoff_height_range_m": [3.0, 3.0],
+            "transport_height_ratio": [0.55, 0.85],
+            "load_weight_ratio_range": [0.5, 0.5],
+        },
+    }
+
+    tasks = generate_tasks(0, "overlap_no_conflict", [_crane(0), _crane(1)], config, np.random.default_rng(11))
+
+    start_times_by_crane = {}
+    for task in tasks:
+        start_times_by_crane.setdefault(task.crane_index, []).append(task.start_time)
+        assert 0.0 <= task.start_time <= 900.0 * 0.75
+    assert set(start_times_by_crane) == {0, 1}
+    for start_times in start_times_by_crane.values():
+        assert start_times == sorted(start_times)
+    assert any(start_time > 80.0 for start_times in start_times_by_crane.values() for start_time in start_times)
+
+
 def test_default_config_is_formal_dataset_configuration() -> None:
     config = load_config(Path("configs") / "default.yaml")
 
@@ -70,6 +96,8 @@ def test_default_config_is_formal_dataset_configuration() -> None:
     assert config["simulation"]["dt"] == 0.2
     assert config["simulation"]["num_cranes_range"] == [3, 6]
     assert config["simulation"]["save_format"] == ["csv", "parquet", "npz"]
+    assert config["task_generation"]["tasks_per_crane_range"] == [4, 12]
+    assert config["quality_control"]["fail_on_risk_ratio_out_of_range"] is True
 
 
 def test_debug_configs_use_full_yaml_schema() -> None:
@@ -81,6 +109,7 @@ def test_debug_configs_use_full_yaml_schema() -> None:
         assert isinstance(config["task_generation"]["transport_height_ratio"], list)
         assert config["controller"]["command_smoothing"] is True
         assert "command_smoothing_alpha" in config["controller"]
+        assert config["quality_control"]["fail_on_risk_ratio_out_of_range"] is False
 
 
 def test_configured_save_formats_normalize_and_reject_unknown_values() -> None:
@@ -142,6 +171,57 @@ def test_simulate_dataset_outputs_formal_ids_and_window_scenario_uids() -> None:
         assert "scenario_business_ids" in data.files
         assert "scenario_uids" in data.files
         assert data["scenario_business_ids"].dtype.kind in {"U", "S"}
+
+
+def test_simulate_dataset_records_parquet_write_status_in_metadata(monkeypatch) -> None:
+    config = load_config(Path("configs") / "debug_fast.yaml")
+    config["project"]["output_dir"] = "test_artifacts/parquet_metadata"
+    config["project"]["run_id"] = "run_parquet_metadata"
+    config["simulation"]["num_scenarios"] = 1
+    config["simulation"]["scenario_duration_s"] = 8.0
+    config["simulation"]["dt"] = 1.0
+    config["simulation"]["save_format"] = ["csv", "parquet", "npz"]
+    config["quality_control"]["target_risk_ratio_range"] = [0.0, 1.0]
+
+    def fake_write_optional_parquet(df, path, required=False):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("fake parquet", encoding="utf-8")
+        return {"written": True, "path": str(path), "error": None}
+
+    monkeypatch.setattr("tower_sim.simulation.write_optional_parquet", fake_write_optional_parquet)
+
+    output_dir, _ = simulate_dataset(config)
+
+    metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["save_formats"] == ["csv", "npz", "parquet"]
+    assert metadata["parquet_written"] is True
+    assert metadata["parquet_tables"]["state_true"]["written"] is True
+    assert metadata["parquet_tables"]["edge_future_label"]["error"] is None
+
+
+def test_simulate_dataset_records_parquet_failures_without_raising(monkeypatch) -> None:
+    config = load_config(Path("configs") / "debug_fast.yaml")
+    config["project"]["output_dir"] = "test_artifacts/parquet_metadata_failure"
+    config["project"]["run_id"] = "run_parquet_metadata_failure"
+    config["simulation"]["num_scenarios"] = 1
+    config["simulation"]["scenario_duration_s"] = 8.0
+    config["simulation"]["dt"] = 1.0
+    config["simulation"]["save_format"] = ["csv", "parquet", "npz"]
+    config["quality_control"]["target_risk_ratio_range"] = [0.0, 1.0]
+
+    def fake_write_optional_parquet(df, path, required=False):
+        if required:
+            raise RuntimeError(f"Failed to write parquet: {path}")
+        return {"written": False, "path": str(path), "error": "pyarrow not installed"}
+
+    monkeypatch.setattr("tower_sim.simulation.write_optional_parquet", fake_write_optional_parquet)
+
+    output_dir, _ = simulate_dataset(config)
+
+    metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["parquet_written"] is False
+    assert metadata["parquet_tables"]["state_true"]["written"] is False
+    assert metadata["parquet_tables"]["state_true"]["error"] == "pyarrow not installed"
 
 
 def test_no_overlap_safe_scenarios_have_no_radius_overlap_or_are_relabelled() -> None:

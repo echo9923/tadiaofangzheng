@@ -98,13 +98,25 @@ def update_state(
 
     if r < static.min_radius:
         r = static.min_radius
+        if r_dot < 0.0:
+            r_dot = 0.0
+            r_ddot = (r_dot - state.r_dot) / dt
     elif r > static.max_radius:
         r = static.max_radius
+        if r_dot > 0.0:
+            r_dot = 0.0
+            r_ddot = (r_dot - state.r_dot) / dt
 
     if h < h_min:
         h = h_min
+        if h_dot < 0.0:
+            h_dot = 0.0
+            h_ddot = (h_dot - state.h_dot) / dt
     elif h > h_upper:
         h = h_upper
+        if h_dot > 0.0:
+            h_dot = 0.0
+            h_ddot = (h_dot - state.h_dot) / dt
 
     return CraneState(
         theta=theta,

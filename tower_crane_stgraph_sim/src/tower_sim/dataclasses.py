@@ -68,8 +68,8 @@ class Command:
     theta_dot_cmd: float
     r_dot_cmd: float
     h_dot_cmd: float
-    brake_flag: int
-    emergency_flag: int
+    brake_flag: int = 0
+    emergency_flag: int = 0
 
 
 @dataclass(frozen=True)

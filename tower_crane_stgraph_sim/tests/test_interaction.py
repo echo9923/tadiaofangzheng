@@ -120,6 +120,58 @@ def test_pairwise_edge_approach_speed_uses_current_velocity_projection_not_previ
     assert edge["relative_approach_speed_hook_hook"] > 0.0
 
 
+def test_pairwise_edge_approach_speed_ignores_previous_distance_history() -> None:
+    static_i = make_static(0, 0.0, 0.0, priority=2)
+    static_j = make_static(1, 25.0, 0.0, priority=1)
+    state_i = make_state(0.0, r=10.0)
+    state_j = make_state(math.pi, r=10.0)
+    state_i.r_dot = 1.0
+    state_j.r_dot = 1.0
+    geom_i = reconstruct_geometry(static_i, state_i)
+    geom_j = reconstruct_geometry(static_j, state_j)
+    thresholds = {
+        "d_safe_arm_arm_m": 1.0,
+        "d_safe_arm_hook_m": 1.0,
+        "d_safe_hook_hook_m": 1.0,
+    }
+
+    edge_with_small_history = compute_pairwise_edge(
+        static_i,
+        static_j,
+        state_i,
+        state_j,
+        geom_i,
+        geom_j,
+        prev_distances={
+            "d_arm_arm": -1000.0,
+            "d_arm_hook": -1000.0,
+            "d_hook_hook": -1000.0,
+        },
+        dt=1.0,
+        thresholds=thresholds,
+    )
+    edge_with_large_history = compute_pairwise_edge(
+        static_i,
+        static_j,
+        state_i,
+        state_j,
+        geom_i,
+        geom_j,
+        prev_distances={
+            "d_arm_arm": 1000.0,
+            "d_arm_hook": 1000.0,
+            "d_hook_hook": 1000.0,
+        },
+        dt=1.0,
+        thresholds=thresholds,
+    )
+
+    assert edge_with_small_history["relative_approach_speed"] == edge_with_large_history["relative_approach_speed"]
+    assert edge_with_small_history["relative_approach_speed_arm_arm"] == edge_with_large_history["relative_approach_speed_arm_arm"]
+    assert edge_with_small_history["relative_approach_speed_arm_hook"] == edge_with_large_history["relative_approach_speed_arm_hook"]
+    assert edge_with_small_history["relative_approach_speed_hook_hook"] == edge_with_large_history["relative_approach_speed_hook_hook"]
+
+
 def test_arm_arm_avoidance_stops_rotation_first_and_keeps_other_axes() -> None:
     statics = [
         make_static(0, 0.0, 0.0, priority=2),

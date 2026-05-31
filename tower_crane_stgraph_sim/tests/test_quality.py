@@ -48,7 +48,12 @@ def test_quality_gate_raises_on_risk_ratio_outside_target_range() -> None:
         "risk_any_ratio": 0.75,
         "risk_ratio_in_target_range": False,
     }
-    config = {"quality_control": {"target_risk_ratio_range": [0.02, 0.50]}}
+    config = {
+        "quality_control": {
+            "target_risk_ratio_range": [0.02, 0.50],
+            "fail_on_risk_ratio_out_of_range": True,
+        }
+    }
 
     try:
         enforce_quality_gates(stats, config)
@@ -56,6 +61,24 @@ def test_quality_gate_raises_on_risk_ratio_outside_target_range() -> None:
         assert "risk_any_ratio" in str(exc)
     else:
         raise AssertionError("Expected quality gate to reject risk ratio outside target range")
+
+
+def test_quality_gate_can_warn_only_for_risk_ratio_outside_target_range() -> None:
+    stats = {
+        "has_nan_required": False,
+        "future_leakage": False,
+        "risk_any_ratio": 0.75,
+        "risk_ratio_in_target_range": False,
+        "split_disjoint": True,
+    }
+    config = {
+        "quality_control": {
+            "target_risk_ratio_range": [0.02, 0.50],
+            "fail_on_risk_ratio_out_of_range": False,
+        }
+    }
+
+    enforce_quality_gates(stats, config)
 
 
 def test_quality_gate_raises_on_integrity_failures() -> None:
@@ -234,6 +257,147 @@ def test_quality_report_allows_configured_emergency_braking_acceleration() -> No
             "simulation": {"dt": 1.0},
             "project": {"random_seed": 1},
             "dynamics": {"emergency_brake_scale": 2.0},
+            "quality_control": {"target_risk_ratio_range": [0.0, 1.0]},
+        },
+        geometry_table=pd.DataFrame(geometry_rows),
+    )
+
+    assert stats["acc_out_of_bounds"] is False
+
+
+def test_quality_report_allows_configured_normal_braking_acceleration() -> None:
+    output_dir = Path("test_artifacts") / f"quality_normal_brake_{uuid.uuid4().hex}"
+    output_dir.mkdir(parents=True)
+    scenario_table = pd.DataFrame(
+        [
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "num_cranes": 2,
+                "duration_s": 1.0,
+                "split": "train",
+            }
+        ]
+    )
+    crane_static = pd.DataFrame(
+        [
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "crane_id": crane_id,
+                "crane_uid": f"crane_0{crane_id}",
+                "base_x": crane_id * 30.0,
+                "base_y": 0.0,
+                "min_radius": 2.0,
+                "max_radius": 10.0,
+                "tower_height": 30.0,
+                "jib_length": 12.0,
+                "max_theta_dot": 2.0,
+                "max_r_dot": 2.0,
+                "max_h_dot": 2.0,
+                "max_theta_acc": 1.0,
+                "max_r_acc": 1.0,
+                "max_h_acc": 1.0,
+                "load_capacity": 10000.0,
+            }
+            for crane_id in [0, 1]
+        ]
+    )
+    state_rows = []
+    geometry_rows = []
+    for crane_id in [0, 1]:
+        state_rows.append(
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "step": 0,
+                "timestamp": 0.0,
+                "crane_id": crane_id,
+                "crane_uid": f"crane_0{crane_id}",
+                "theta": 0.0,
+                "r": 5.0,
+                "h": 10.0,
+                "theta_dot": 0.0,
+                "r_dot": 0.0,
+                "h_dot": 0.0,
+                "theta_ddot": 1.5 if crane_id == 0 else 0.0,
+                "r_ddot": -1.5 if crane_id == 0 else 0.0,
+                "h_ddot": 1.5 if crane_id == 0 else 0.0,
+                "load_weight": 0.0,
+                "command_theta": 0.0,
+                "command_r": 0.0,
+                "command_h": 0.0,
+                "brake_flag": 1 if crane_id == 0 else 0,
+                "emergency_flag": 0,
+                "task_id": 0,
+                "task_uid": "task_00_0000",
+                "task_stage": "transport_to_dropoff",
+            }
+        )
+        geometry_rows.append(
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "step": 0,
+                "crane_id": crane_id,
+                "crane_uid": f"crane_0{crane_id}",
+                "root_x": crane_id * 30.0,
+                "root_y": 0.0,
+                "tip_x": crane_id * 30.0 + 5.0,
+                "tip_y": 0.0,
+                "hook_x": crane_id * 30.0 + 5.0,
+                "hook_y": 0.0,
+            }
+        )
+    edge_current = pd.DataFrame(
+        [
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "step": 0,
+                "crane_i": 0,
+                "crane_j": 1,
+                "d_arm_arm": 20.0,
+                "d_arm_hook_i_to_j": 20.0,
+                "d_arm_hook_j_to_i": 20.0,
+                "d_hook_hook": 20.0,
+            }
+        ]
+    )
+    edge_future_label = pd.DataFrame(
+        [
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "step": 0,
+                "horizon_s": 1.0,
+                "crane_i": 0,
+                "crane_j": 1,
+                "future_min_d_arm_arm": 20.0,
+                "future_min_d_arm_hook_i_to_j": 20.0,
+                "future_min_d_arm_hook_j_to_i": 20.0,
+                "future_min_d_hook_hook": 20.0,
+                "risk_arm_arm": 0,
+                "risk_arm_hook_i_to_j": 0,
+                "risk_arm_hook_j_to_i": 0,
+                "risk_hook_hook": 0,
+            }
+        ]
+    )
+
+    stats = generate_quality_report(
+        output_dir,
+        scenario_table,
+        crane_static,
+        pd.DataFrame([{"scenario_id": 0, "task_id": 0}]),
+        pd.DataFrame(state_rows),
+        pd.DataFrame(state_rows),
+        edge_current,
+        edge_future_label,
+        {
+            "simulation": {"dt": 1.0},
+            "project": {"random_seed": 1},
+            "dynamics": {"normal_brake_scale": 2.0},
             "quality_control": {"target_risk_ratio_range": [0.0, 1.0]},
         },
         geometry_table=pd.DataFrame(geometry_rows),

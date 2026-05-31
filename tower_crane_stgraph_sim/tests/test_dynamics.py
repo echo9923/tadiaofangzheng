@@ -92,8 +92,37 @@ def test_update_state_clamps_radius_and_height_and_damps_boundary_velocity() -> 
 
     assert math.isclose(updated.r, static.max_radius)
     assert math.isclose(updated.h, static.tower_height - 2.0)
-    assert abs(updated.r_ddot) <= static.max_r_acc + 1e-12
-    assert abs(updated.h_ddot) <= static.max_h_acc + 1e-12
+    assert updated.r_dot == 0.0
+    assert updated.h_dot == 0.0
+    assert math.isclose(updated.r_ddot, -state.r_dot)
+    assert math.isclose(updated.h_ddot, -state.h_dot)
+
+
+def test_update_state_zeroes_outward_velocity_at_lower_boundaries() -> None:
+    static = make_static()
+    state = CraneState(
+        theta=0.0,
+        r=static.min_radius + 0.1,
+        h=0.1,
+        theta_dot=0.0,
+        r_dot=-1.5,
+        h_dot=-1.0,
+        theta_ddot=0.0,
+        r_ddot=0.0,
+        h_ddot=0.0,
+        load_weight=0.0,
+        task_id=0,
+        task_stage="transport_to_dropoff",
+    )
+
+    updated = update_state(state, static, Command(0.0, -1.5, -1.0), dt=1.0, h_clearance=2.0)
+
+    assert math.isclose(updated.r, static.min_radius)
+    assert math.isclose(updated.h, 0.0)
+    assert updated.r_dot == 0.0
+    assert updated.h_dot == 0.0
+    assert math.isclose(updated.r_ddot, -state.r_dot)
+    assert math.isclose(updated.h_ddot, -state.h_dot)
 
 
 def test_update_state_does_not_create_acceleration_spike_when_clamping_boundaries() -> None:
@@ -123,8 +152,17 @@ def test_update_state_does_not_create_acceleration_spike_when_clamping_boundarie
 
     assert math.isclose(updated.r, static.max_radius)
     assert math.isclose(updated.h, static.tower_height - 2.0)
-    assert abs(updated.r_ddot) <= static.max_r_acc + 1e-12
-    assert abs(updated.h_ddot) <= static.max_h_acc + 1e-12
+    assert updated.r_dot == 0.0
+    assert updated.h_dot == 0.0
+    assert math.isclose(updated.r_ddot, -state.r_dot)
+    assert math.isclose(updated.h_ddot, -state.h_dot)
+
+
+def test_command_flags_default_to_zero() -> None:
+    command = Command(0.1, 0.2, 0.3)
+
+    assert command.brake_flag == 0
+    assert command.emergency_flag == 0
 
 
 def test_emergency_flag_zeroes_commands_and_uses_stronger_braking() -> None:

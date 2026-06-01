@@ -206,6 +206,34 @@ def _task_point(base: pd.Series, row: pd.Series, prefix: str) -> tuple[float, fl
     )
 
 
+def project_25d(x: float, y: float, z: float = 0.0, z_scale: float = 0.45) -> tuple[float, float]:
+    """Project x/y/z into a stable isometric 2.5D drawing plane."""
+
+    xp = float(x) - 0.55 * float(y)
+    yp = 0.35 * float(x) + 0.35 * float(y) + float(z_scale) * float(z)
+    return xp, yp
+
+
+def _project_series_point(row: pd.Series, x_col: str, y_col: str, z_col: str | None = None) -> tuple[float, float]:
+    z = float(row.get(z_col, 0.0)) if z_col is not None else 0.0
+    return project_25d(float(row[x_col]), float(row[y_col]), z)
+
+
+def _project_task_point(base: pd.Series, row: pd.Series, prefix: str) -> tuple[float, float] | None:
+    point = _task_point(base, row, prefix)
+    if point is None:
+        return None
+    height = float(row.get(f"{prefix}_h", row.get("transport_h", 0.0)))
+    return project_25d(point[0], point[1], height)
+
+
+def _project_radius(base_x: float, base_y: float, radius: float, z: float = 0.0) -> tuple[list[float], list[float]]:
+    import math
+
+    points = [project_25d(base_x + radius * math.cos(t), base_y + radius * math.sin(t), z) for t in [i * 6.28318530718 / 96 for i in range(97)]]
+    return [point[0] for point in points], [point[1] for point in points]
+
+
 def _id_matches(left: Any, right: Any) -> bool:
     if str(left) == str(right):
         return True
@@ -291,10 +319,11 @@ def _plotly_frame_traces(
                 if radius_col not in row:
                     continue
                 radius = float(row[radius_col])
+                radius_x, radius_y = _project_radius(base_x, base_y, radius, z=0.0)
                 traces.append(
                     go.Scatter(
-                        x=[base_x + radius * __import__("math").cos(t) for t in [i * 6.28318530718 / 72 for i in range(73)]],
-                        y=[base_y + radius * __import__("math").sin(t) for t in [i * 6.28318530718 / 72 for i in range(73)]],
+                        x=radius_x,
+                        y=radius_y,
                         mode="lines",
                         line={"color": "#9ca3af", "width": 1, "dash": dash},
                         opacity=0.28,
@@ -313,8 +342,8 @@ def _plotly_frame_traces(
                 base = static_lookup.get(str(row.get("crane_id", crane_key)))
             if base is None:
                 continue
-            pickup = _task_point(base, row, "pickup")
-            dropoff = _task_point(base, row, "dropoff")
+            pickup = _project_task_point(base, row, "pickup")
+            dropoff = _project_task_point(base, row, "dropoff")
             if pickup is not None:
                 traces.append(go.Scatter(x=[pickup[0]], y=[pickup[1]], mode="markers", marker={"symbol": "triangle-up", "size": 9, "color": "#b7791f"}, name="取货点", showlegend=False, xaxis="x", yaxis="y"))
             if dropoff is not None:
@@ -322,10 +351,11 @@ def _plotly_frame_traces(
 
     if layers.get("trail", True) and not trail.empty:
         for crane_id, data in trail.groupby("crane_id" if "crane_id" in trail.columns else "crane_index"):
+            points = [_project_series_point(row, "hook_x", "hook_y", "hook_z") for _, row in data.iterrows()]
             traces.append(
                 go.Scatter(
-                    x=data["hook_x"],
-                    y=data["hook_y"],
+                    x=[point[0] for point in points],
+                    y=[point[1] for point in points],
                     mode="lines",
                     line={"color": "#64748b", "width": 1},
                     opacity=0.38,
@@ -351,7 +381,9 @@ def _plotly_frame_traces(
             min_distance = min(float(row.get(col, 9999.0)) for col in ["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"])
             color = "#dc2626" if is_selected else "#d97706" if min_distance < 5.0 else "#94a3b8"
             width = 3 if is_selected else 1
-            traces.append(go.Scatter(x=[float(left["hook_x"]), float(right["hook_x"])], y=[float(left["hook_y"]), float(right["hook_y"])], mode="lines", line={"color": color, "width": width}, opacity=0.65, name="当前边", showlegend=False, xaxis="x", yaxis="y"))
+            left_hook = _project_series_point(left, "hook_x", "hook_y", "hook_z")
+            right_hook = _project_series_point(right, "hook_x", "hook_y", "hook_z")
+            traces.append(go.Scatter(x=[left_hook[0], right_hook[0]], y=[left_hook[1], right_hook[1]], mode="lines", line={"color": color, "width": width}, opacity=0.65, name="当前边", showlegend=False, xaxis="x", yaxis="y"))
 
     if layers.get("future_risk", True) and frame.labels is not None and not frame.labels.empty:
         geometry_lookup = _crane_lookup(frame.geometry)
@@ -366,20 +398,31 @@ def _plotly_frame_traces(
                 right = geometry_lookup.get(str(row.get("crane_j")))
             if left is None or right is None:
                 continue
-            traces.append(go.Scatter(x=[float(left["hook_x"]), float(right["hook_x"])], y=[float(left["hook_y"]), float(right["hook_y"])], mode="lines", line={"color": "#be123c", "width": 3, "dash": "dash"}, opacity=0.88, name="未来风险边", showlegend=False, xaxis="x", yaxis="y"))
+            left_hook = _project_series_point(left, "hook_x", "hook_y", "hook_z")
+            right_hook = _project_series_point(right, "hook_x", "hook_y", "hook_z")
+            traces.append(go.Scatter(x=[left_hook[0], right_hook[0]], y=[left_hook[1], right_hook[1]], mode="lines", line={"color": "#be123c", "width": 3, "dash": "dash"}, opacity=0.88, name="未来风险边", showlegend=False, xaxis="x", yaxis="y"))
 
     for _, row in frame.geometry.iterrows():
         crane_id = row.get("crane_id", row.get("crane_index", ""))
         is_selected = str(crane_id) in selected_ids
         color = "#0f766e" if is_selected else "#2563eb"
         width = 4 if is_selected else 2
-        traces.append(go.Scatter(x=[row["root_x"], row["tip_x"]], y=[row["root_y"], row["tip_y"]], mode="lines", line={"color": color, "width": width}, name=f"吊臂 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+        root = _project_series_point(row, "root_x", "root_y", "root_z")
+        tip = _project_series_point(row, "tip_x", "tip_y", "tip_z")
+        hook = _project_series_point(row, "hook_x", "hook_y", "hook_z")
+        hook_top = project_25d(float(row["hook_x"]), float(row["hook_y"]), float(row.get("tip_z", row.get("root_z", 0.0))))
+        traces.append(go.Scatter(x=[root[0], tip[0]], y=[root[1], tip[1]], mode="lines", line={"color": color, "width": width}, name=f"吊臂 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+        traces.append(go.Scatter(x=[hook_top[0], hook[0]], y=[hook_top[1], hook[1]], mode="lines", line={"color": "#475569", "width": 1, "dash": "dot"}, opacity=0.72, name=f"吊钩钢丝 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
         text = f"{crane_id}<br>h={float(row.get('hook_z', 0.0)):.1f}m" if layers.get("height_text", True) else str(crane_id)
-        traces.append(go.Scatter(x=[row["hook_x"]], y=[row["hook_y"]], mode="markers+text", marker={"symbol": "x", "size": 11, "color": "#c2410c"}, text=[text], textposition="top center", name=f"吊钩 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+        traces.append(go.Scatter(x=[hook[0]], y=[hook[1]], mode="markers+text", marker={"symbol": "x", "size": 11, "color": "#c2410c"}, text=[text], textposition="top center", name=f"吊钩 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
 
     for _, row in frame.static.iterrows():
         crane_id = row.get("crane_id", row.get("crane_index", ""))
-        traces.append(go.Scatter(x=[row["base_x"]], y=[row["base_y"]], mode="markers+text", marker={"size": 9, "color": "#1f2937"}, text=[str(crane_id)], textposition="middle right", name=f"基座 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+        base_z = float(row.get("base_z", 0.0))
+        base = project_25d(float(row["base_x"]), float(row["base_y"]), base_z)
+        root = project_25d(float(row["base_x"]), float(row["base_y"]), base_z + float(row.get("tower_height", 0.0)))
+        traces.append(go.Scatter(x=[base[0], root[0]], y=[base[1], root[1]], mode="lines", line={"color": "#334155", "width": 2}, opacity=0.76, name=f"塔身 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+        traces.append(go.Scatter(x=[base[0]], y=[base[1]], mode="markers+text", marker={"size": 9, "color": "#1f2937"}, text=[str(crane_id)], textposition="middle right", name=f"基座 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
 
     row_i = _geometry_row(frame.geometry, selected_pair[0]) if selected_pair is not None else None
     row_j = _geometry_row(frame.geometry, selected_pair[1]) if selected_pair is not None else None
@@ -407,6 +450,7 @@ def plotly_25d_animation_for_scenario(
     cache: Any,
     *,
     steps: list[int] | None = None,
+    current_step: int | None = None,
     selected_pair: tuple[Any, Any] | None = None,
     layers: dict[str, bool] | None = None,
     trail_seconds: float = 20.0,
@@ -421,8 +465,13 @@ def plotly_25d_animation_for_scenario(
     if not sampled_steps:
         fig = go.Figure()
         return fig, False
-    first_frame = cache.get_frame(sampled_steps[0])
-    pair = selected_pair or cache.strongest_risk_pair(sampled_steps[0])
+    active_step = cache.nearest_step(current_step) if current_step is not None else sampled_steps[0]
+    if active_step not in sampled_steps:
+        sampled_steps = [active_step] + sampled_steps
+        sampled_steps = sorted(dict.fromkeys(sampled_steps), key=lambda value: cache.steps.index(cache.nearest_step(value)))
+    active_index = sampled_steps.index(active_step)
+    first_frame = cache.get_frame(active_step)
+    pair = selected_pair or cache.strongest_risk_pair(active_step)
     edge_series = cache.edge_series_for_pair(*pair) if pair is not None else pd.DataFrame()
 
     fig = make_subplots(
@@ -431,13 +480,13 @@ def plotly_25d_animation_for_scenario(
         specs=[[{"rowspan": 2}, {}], [None, {}]],
         column_widths=[0.68, 0.32],
         row_heights=[0.46, 0.54],
-        subplot_titles=("x-y 俯视动画", f"高度剖面：{_selected_pair_label(pair)}", "距离/TTC 曲线"),
+        subplot_titles=("2.5D 等轴动画", f"高度剖面：{_selected_pair_label(pair)}", "距离/TTC 曲线"),
     )
     first_traces = _plotly_frame_traces(
         go,
         first_frame,
         selected_pair=pair,
-        trail=cache.trail_for_step(sampled_steps[0], seconds=trail_seconds),
+        trail=cache.trail_for_step(active_step, seconds=trail_seconds),
         edge_series=edge_series,
         layers=active_layers,
     )
@@ -482,7 +531,7 @@ def plotly_25d_animation_for_scenario(
         ],
         sliders=[
             {
-                "active": 0,
+                "active": active_index,
                 "currentvalue": {"prefix": "步数 "},
                 "steps": [
                     {"label": str(step), "method": "animate", "args": [[str(step)], {"mode": "immediate", "frame": {"duration": 0, "redraw": True}, "transition": {"duration": 0}}]}
@@ -491,8 +540,8 @@ def plotly_25d_animation_for_scenario(
             }
         ],
     )
-    fig.update_xaxes(title_text="x / m", row=1, col=1)
-    fig.update_yaxes(title_text="y / m", scaleanchor="x", scaleratio=1, row=1, col=1)
+    fig.update_xaxes(title_text="等轴 x / m", row=1, col=1)
+    fig.update_yaxes(title_text="等轴 y / m", scaleanchor="x", scaleratio=1, row=1, col=1)
     fig.update_yaxes(title_text="高度 / m", row=1, col=2)
     fig.update_xaxes(title_text="时间 / s", row=2, col=2)
     fig.update_yaxes(title_text="距离 / m", row=2, col=2)
@@ -697,9 +746,11 @@ def plot_25d_frame(
             base_x = float(row["base_x"])
             base_y = float(row["base_y"])
             if "max_radius" in row:
-                ax_top.add_patch(plt.Circle((base_x, base_y), float(row["max_radius"]), fill=False, alpha=0.16, color="#64748b"))
+                radius_x, radius_y = _project_radius(base_x, base_y, float(row["max_radius"]), z=0.0)
+                ax_top.plot(radius_x, radius_y, color="#64748b", linewidth=0.8, alpha=0.16)
             if "min_radius" in row:
-                ax_top.add_patch(plt.Circle((base_x, base_y), float(row["min_radius"]), fill=False, alpha=0.25, color="#64748b", linestyle="--"))
+                radius_x, radius_y = _project_radius(base_x, base_y, float(row["min_radius"]), z=0.0)
+                ax_top.plot(radius_x, radius_y, color="#64748b", linewidth=0.8, linestyle="--", alpha=0.25)
 
     if active_layers.get("tasks", True):
         for _, row in frame.tasks.iterrows():
@@ -709,8 +760,8 @@ def plot_25d_frame(
                 base = static_lookup.get(str(row.get("crane_id", crane_key)))
             if base is None:
                 continue
-            pickup = _task_point(base, row, "pickup")
-            dropoff = _task_point(base, row, "dropoff")
+            pickup = _project_task_point(base, row, "pickup")
+            dropoff = _project_task_point(base, row, "dropoff")
             if pickup is not None:
                 ax_top.scatter(*pickup, marker="^", color="#b7791f", s=28, alpha=0.7)
             if dropoff is not None:
@@ -719,7 +770,8 @@ def plot_25d_frame(
     if active_layers.get("trail", True) and trail is not None and not trail.empty:
         group_col = "crane_id" if "crane_id" in trail.columns else "crane_index"
         for _, data in trail.groupby(group_col):
-            ax_top.plot(data["hook_x"], data["hook_y"], color="#64748b", linewidth=1.0, alpha=0.38)
+            points = [_project_series_point(row, "hook_x", "hook_y", "hook_z") for _, row in data.iterrows()]
+            ax_top.plot([point[0] for point in points], [point[1] for point in points], color="#64748b", linewidth=1.0, alpha=0.38)
 
     if active_layers.get("edges", True):
         for _, row in frame.edges.iterrows():
@@ -734,7 +786,9 @@ def plot_25d_frame(
             is_selected = selected_pair is not None and _id_matches(row.get("crane_i"), selected_pair[0]) and _id_matches(row.get("crane_j"), selected_pair[1])
             min_distance = min(float(row.get(col, 9999.0)) for col in ["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"])
             color = "#dc2626" if is_selected else "#d97706" if min_distance < 5.0 else "#94a3b8"
-            ax_top.plot([float(left["hook_x"]), float(right["hook_x"])], [float(left["hook_y"]), float(right["hook_y"])], color=color, linewidth=2.2 if is_selected else 0.9, alpha=0.62)
+            left_hook = _project_series_point(left, "hook_x", "hook_y", "hook_z")
+            right_hook = _project_series_point(right, "hook_x", "hook_y", "hook_z")
+            ax_top.plot([left_hook[0], right_hook[0]], [left_hook[1], right_hook[1]], color=color, linewidth=2.2 if is_selected else 0.9, alpha=0.62)
 
     if active_layers.get("future_risk", True) and frame.labels is not None and not frame.labels.empty:
         for _, row in frame.labels.iterrows():
@@ -748,24 +802,35 @@ def plot_25d_frame(
                 right = geometry_lookup.get(str(row.get("crane_j")))
             if left is None or right is None:
                 continue
-            ax_top.plot([float(left["hook_x"]), float(right["hook_x"])], [float(left["hook_y"]), float(right["hook_y"])], color="#be123c", linewidth=2.4, linestyle="--", alpha=0.85)
+            left_hook = _project_series_point(left, "hook_x", "hook_y", "hook_z")
+            right_hook = _project_series_point(right, "hook_x", "hook_y", "hook_z")
+            ax_top.plot([left_hook[0], right_hook[0]], [left_hook[1], right_hook[1]], color="#be123c", linewidth=2.4, linestyle="--", alpha=0.85)
 
     for _, row in frame.geometry.iterrows():
         crane_id = row.get("crane_id", row.get("crane_index", ""))
         is_selected = str(crane_id) in selected_ids
         color = "#0f766e" if is_selected else "#2563eb"
-        ax_top.plot([row["root_x"], row["tip_x"]], [row["root_y"], row["tip_y"]], color=color, linewidth=3.2 if is_selected else 1.8)
-        ax_top.scatter(row["hook_x"], row["hook_y"], marker="x", color="#c2410c", s=42)
+        root = _project_series_point(row, "root_x", "root_y", "root_z")
+        tip = _project_series_point(row, "tip_x", "tip_y", "tip_z")
+        hook = _project_series_point(row, "hook_x", "hook_y", "hook_z")
+        hook_top = project_25d(float(row["hook_x"]), float(row["hook_y"]), float(row.get("tip_z", row.get("root_z", 0.0))))
+        ax_top.plot([root[0], tip[0]], [root[1], tip[1]], color=color, linewidth=3.2 if is_selected else 1.8)
+        ax_top.plot([hook_top[0], hook[0]], [hook_top[1], hook[1]], color="#475569", linewidth=0.8, linestyle=":", alpha=0.72)
+        ax_top.scatter(hook[0], hook[1], marker="x", color="#c2410c", s=42)
         label = f"{crane_id}\nh={float(row.get('hook_z', 0.0)):.1f}m" if active_layers.get("height_text", True) else str(crane_id)
-        ax_top.text(row["hook_x"], row["hook_y"], label, fontsize=7, color="#1f2937")
+        ax_top.text(hook[0], hook[1], label, fontsize=7, color="#1f2937")
 
     for _, row in frame.static.iterrows():
-        ax_top.scatter(row["base_x"], row["base_y"], color="#111827", s=36)
-        ax_top.text(row["base_x"], row["base_y"], f" {row.get('crane_id', row.get('crane_index', ''))}", fontsize=8)
+        base_z = float(row.get("base_z", 0.0))
+        base = project_25d(float(row["base_x"]), float(row["base_y"]), base_z)
+        root = project_25d(float(row["base_x"]), float(row["base_y"]), base_z + float(row.get("tower_height", 0.0)))
+        ax_top.plot([base[0], root[0]], [base[1], root[1]], color="#334155", linewidth=1.6, alpha=0.76)
+        ax_top.scatter(base[0], base[1], color="#111827", s=36)
+        ax_top.text(base[0], base[1], f" {row.get('crane_id', row.get('crane_index', ''))}", fontsize=8)
 
-    ax_top.set_title("x-y 俯视动画")
-    ax_top.set_xlabel("x / m")
-    ax_top.set_ylabel("y / m")
+    ax_top.set_title("2.5D 等轴动画")
+    ax_top.set_xlabel("等轴 x / m")
+    ax_top.set_ylabel("等轴 y / m")
     ax_top.set_aspect("equal", adjustable="datalim")
     ax_top.grid(True, color="#e5e7eb", linewidth=0.5)
 

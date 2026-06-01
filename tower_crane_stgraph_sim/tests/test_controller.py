@@ -1,5 +1,5 @@
-from tower_sim.controller import advance_task_stage, choose_active_task
-from tower_sim.dataclasses import CraneState, LiftingTask
+from tower_sim.controller import advance_task_stage, choose_active_task, smooth_command
+from tower_sim.dataclasses import Command, CraneState, LiftingTask
 
 
 def make_task(task_id: int, start_time: float) -> LiftingTask:
@@ -89,3 +89,28 @@ def test_stage_tolerance_uses_separate_angle_radius_height_thresholds() -> None:
     updated = advance_task_stage(state, task, stage_tolerance=(0.03, 0.4, 0.4))
 
     assert updated.task_stage == "move_to_pickup"
+
+
+def test_smooth_command_does_not_stick_event_flags() -> None:
+    previous = Command(
+        theta_dot_cmd=1.0,
+        r_dot_cmd=2.0,
+        h_dot_cmd=3.0,
+        brake_flag=1,
+        emergency_flag=1,
+    )
+    current = Command(
+        theta_dot_cmd=3.0,
+        r_dot_cmd=6.0,
+        h_dot_cmd=9.0,
+        brake_flag=0,
+        emergency_flag=0,
+    )
+
+    smoothed = smooth_command(current, previous, smoothing=0.25)
+
+    assert smoothed.theta_dot_cmd == 2.5
+    assert smoothed.r_dot_cmd == 5.0
+    assert smoothed.h_dot_cmd == 7.5
+    assert smoothed.brake_flag == 0
+    assert smoothed.emergency_flag == 0

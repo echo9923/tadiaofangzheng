@@ -69,7 +69,10 @@ def test_plotly_25d_animation_has_controls_and_no_input_label_leakage() -> None:
     assert "播放" in labels
     assert "暂停" in labels
     subplot_titles = [annotation.text for annotation in fig.layout.annotations]
+    assert any("2.5D" in title or "等轴" in title for title in subplot_titles)
     assert any("高度剖面" in title for title in subplot_titles)
+    assert fig.layout.xaxis.title.text == "等轴 x / m"
+    assert fig.layout.yaxis.title.text == "等轴 y / m"
     trace_names = [trace.name for trace in fig.data if getattr(trace, "name", None)]
     assert any("轨迹" in name for name in trace_names)
     text = fig.to_json()
@@ -77,6 +80,33 @@ def test_plotly_25d_animation_has_controls_and_no_input_label_leakage() -> None:
     assert "future_min_d" not in text
     assert "ttc_label" not in text
     assert "risk_arm_arm" not in text
+
+
+def test_plotly_current_step_sets_first_frame_and_slider() -> None:
+    cache = _cache()
+    current_step = cache.steps[min(3, len(cache.steps) - 1)]
+
+    fig, sampled = plotly_25d_animation_for_scenario(cache, steps=cache.steps[:5], current_step=current_step, max_frames=5)
+
+    assert sampled is False
+    assert f"步数 {current_step}" in fig.layout.title.text
+    slider = fig.layout.sliders[0]
+    assert slider.steps[slider.active].label == str(current_step)
+    assert fig.frames[slider.active].name == str(current_step)
+
+
+def test_plotly_current_step_is_inserted_when_sampling_skips_it() -> None:
+    cache = _cache()
+    source_steps = cache.steps[:10]
+    current_step = source_steps[3]
+
+    fig, sampled = plotly_25d_animation_for_scenario(cache, steps=source_steps, current_step=current_step, max_frames=3)
+
+    assert sampled is True
+    frame_names = [frame.name for frame in fig.frames]
+    assert str(current_step) in frame_names
+    slider = fig.layout.sliders[0]
+    assert slider.steps[slider.active].label == str(current_step)
 
 
 def test_risk_clip_gif_and_mp4_export() -> None:

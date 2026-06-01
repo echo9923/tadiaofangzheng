@@ -231,6 +231,7 @@ def _streamlit_main() -> None:
         fig, sampled = plotly_25d_animation_for_scenario(
             cache,
             steps=active_steps,
+            current_step=state.step,
             selected_pair=state.selected_pair,
             layers=layers,
             trail_seconds=20.0,
@@ -271,7 +272,7 @@ def _streamlit_main() -> None:
             edge_rows = frame.edges
         detail_cols[1].dataframe(rename_columns_for_display(edge_rows), use_container_width=True)
         if state.playing:
-            time.sleep(max(0.05, 0.8 / max(float(state.speed), 0.1)))
+            time.sleep(max(0.05, 0.25 / max(float(state.speed), 0.1)))
             st.rerun()
         return
 

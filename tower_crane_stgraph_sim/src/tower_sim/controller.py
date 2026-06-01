@@ -142,7 +142,7 @@ def make_nominal_command(
 
 
 def smooth_command(current: Command, previous: Command | None, smoothing: float) -> Command:
-    """Blend the current command with the previous one."""
+    """Blend continuous velocity commands; event flags remain frame-local."""
 
     if previous is None or smoothing <= 0.0:
         return current
@@ -151,6 +151,6 @@ def smooth_command(current: Command, previous: Command | None, smoothing: float)
         theta_dot_cmd=(1.0 - alpha) * current.theta_dot_cmd + alpha * previous.theta_dot_cmd,
         r_dot_cmd=(1.0 - alpha) * current.r_dot_cmd + alpha * previous.r_dot_cmd,
         h_dot_cmd=(1.0 - alpha) * current.h_dot_cmd + alpha * previous.h_dot_cmd,
-        brake_flag=max(current.brake_flag, previous.brake_flag),
-        emergency_flag=max(current.emergency_flag, previous.emergency_flag),
+        brake_flag=current.brake_flag,
+        emergency_flag=current.emergency_flag,
     )

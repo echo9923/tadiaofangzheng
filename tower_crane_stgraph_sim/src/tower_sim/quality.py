@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from tower_sim.visualization import hist_plot, risk_ratio_plot, sample_scene_topview, sample_time_series
-from tower_sim.windowing import EDGE_FEATURE_NAMES, NODE_FEATURE_NAMES, assert_no_future_leakage, validate_split_disjoint
+from tower_sim.windowing import EDGE_FEATURE_NAMES, NODE_FEATURE_NAMES, assert_no_future_leakage, validate_named_splits_disjoint
 
 
 def enforce_quality_gates(stats: dict[str, Any], config: dict[str, Any]) -> None:
@@ -117,32 +117,53 @@ def generate_quality_report(
     """Generate quality report markdown and diagnostic plots."""
 
     out = Path(output_dir)
-    plots_dir = out / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    hist_plot(state_true, "theta", plots_dir / "theta_distribution.png", "theta distribution")
-    hist_plot(state_true, "r", plots_dir / "r_distribution.png", "r distribution")
-    hist_plot(state_true, "h", plots_dir / "h_distribution.png", "h distribution")
-    hist_plot(edge_current, "d_arm_arm", plots_dir / "d_arm_arm_distribution.png", "arm-arm distance")
-    if not edge_current.empty:
-        edge_current = edge_current.copy()
-        edge_current["d_arm_hook_min"] = edge_current[["d_arm_hook_i_to_j", "d_arm_hook_j_to_i"]].min(axis=1)
-    hist_plot(edge_current, "d_arm_hook_min", plots_dir / "d_arm_hook_distribution.png", "arm-hook distance")
-    hist_plot(edge_current, "d_hook_hook", plots_dir / "d_hook_hook_distribution.png", "hook-hook distance")
-    risk_ratio_plot(edge_future_label, plots_dir / "risk_ratio_distribution.png")
-    if geometry_table is None:
-        geometry_path = out / "geometry_table.csv"
-        geometry_table = pd.read_csv(geometry_path) if geometry_path.exists() else pd.DataFrame()
-    sample_scene_topview(crane_static, geometry_table, plots_dir / "sample_scene_topview.png")
-    sample_time_series(state_true, plots_dir / "sample_time_series.png")
+    generate_plots = bool(config.get("quality_control", {}).get("generate_summary_plots", True))
+    plot_lines: list[str]
+    if generate_plots:
+        plots_dir = out / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        hist_plot(state_true, "theta", plots_dir / "theta_distribution.png", "theta distribution")
+        hist_plot(state_true, "r", plots_dir / "r_distribution.png", "r distribution")
+        hist_plot(state_true, "h", plots_dir / "h_distribution.png", "h distribution")
+        hist_plot(edge_current, "d_arm_arm", plots_dir / "d_arm_arm_distribution.png", "arm-arm distance")
+        if not edge_current.empty:
+            edge_current = edge_current.copy()
+            edge_current["d_arm_hook_min"] = edge_current[["d_arm_hook_i_to_j", "d_arm_hook_j_to_i"]].min(axis=1)
+        hist_plot(edge_current, "d_arm_hook_min", plots_dir / "d_arm_hook_distribution.png", "arm-hook distance")
+        hist_plot(edge_current, "d_hook_hook", plots_dir / "d_hook_hook_distribution.png", "hook-hook distance")
+        risk_ratio_plot(edge_future_label, plots_dir / "risk_ratio_distribution.png")
+        if geometry_table is None:
+            geometry_path = out / "geometry_table.csv"
+            geometry_table = pd.read_csv(geometry_path) if geometry_path.exists() else pd.DataFrame()
+        sample_scene_topview(crane_static, geometry_table, plots_dir / "sample_scene_topview.png")
+        sample_time_series(state_true, plots_dir / "sample_time_series.png")
+        plot_lines = [
+            "- plots/theta_distribution.png",
+            "- plots/r_distribution.png",
+            "- plots/h_distribution.png",
+            "- plots/d_arm_arm_distribution.png",
+            "- plots/d_arm_hook_distribution.png",
+            "- plots/d_hook_hook_distribution.png",
+            "- plots/risk_ratio_distribution.png",
+            "- plots/sample_scene_topview.png",
+            "- plots/sample_time_series.png",
+        ]
+    else:
+        if not edge_current.empty:
+            edge_current = edge_current.copy()
+            edge_current["d_arm_hook_min"] = edge_current[["d_arm_hook_i_to_j", "d_arm_hook_j_to_i"]].min(axis=1)
+        if geometry_table is None:
+            geometry_table = pd.DataFrame()
+        plot_lines = ["Plots disabled by quality_control.generate_summary_plots=false."]
 
     split_key = "scenario_index" if "scenario_index" in scenario_table.columns else "scenario_id"
-    train_ids = scenario_table[scenario_table["split"] == "train"][split_key].to_numpy()
-    val_ids = scenario_table[scenario_table["split"] == "val"][split_key].to_numpy()
-    test_ids = scenario_table[scenario_table["split"] == "test"][split_key].to_numpy()
+    split_ids = {
+        str(split): scenario_table[scenario_table["split"] == split][split_key].to_numpy()
+        for split in scenario_table["split"].dropna().unique()
+    } if "split" in scenario_table.columns else {}
     split_ok = True
     try:
-        validate_split_disjoint(train_ids, val_ids, test_ids)
+        validate_named_splits_disjoint(split_ids)
     except ValueError:
         split_ok = False
 
@@ -160,7 +181,8 @@ def generate_quality_report(
         merge_keys = ["scenario_index", "crane_index"] if {"scenario_index", "crane_index"}.issubset(state_true.columns) else ["scenario_id", "crane_id"]
         merged = state_true.merge(crane_static, on=merge_keys, how="left", suffixes=("", "_static"))
         r_out = bool(((merged["r"] < merged["min_radius"] - 1e-6) | (merged["r"] > merged["max_radius"] + 1e-6)).any())
-        h_out = bool(((merged["h"] < -1e-6) | (merged["h"] > merged["tower_height"] - 2.0 + 1e-6)).any())
+        h_clearance = float(config.get("dynamics", {}).get("hook_clearance_m", 2.0))
+        h_out = bool(((merged["h"] < -1e-6) | (merged["h"] > merged["tower_height"] - h_clearance + 1e-6)).any())
         speed_out = bool(
             (
                 (merged["theta_dot"].abs() > merged["max_theta_dot"] + 1e-6)
@@ -264,7 +286,9 @@ def generate_quality_report(
         "",
         state_true[["theta", "r", "h", "theta_dot", "r_dot", "h_dot", "theta_ddot", "r_ddot", "h_ddot"]]
         .describe()
-        .to_markdown(),
+        .to_markdown()
+        if {"theta", "r", "h", "theta_dot", "r_dot", "h_dot", "theta_ddot", "r_ddot", "h_ddot"}.issubset(state_true.columns)
+        else "No state records.",
         "",
         "## Distance Distribution",
         "",
@@ -279,7 +303,7 @@ def generate_quality_report(
         f"- h out of bounds: {_yes_no(h_out)}",
         f"- velocity out of bounds: {_yes_no(speed_out)}",
         f"- acceleration out of bounds: {_yes_no(acc_out)}",
-        f"- train/val/test scenario_id disjoint: {_yes_no(split_ok)}",
+        f"- all scenario splits disjoint: {_yes_no(split_ok)}",
         f"- future label leakage detected: {_yes_no(not leakage_ok)}",
         f"- edge_future_label has inf: {_yes_no(edge_future_label_has_inf)}",
         f"- no_overlap_safe radius overlap: {_yes_no(no_overlap_safe_has_overlap)}",
@@ -292,15 +316,7 @@ def generate_quality_report(
         "",
         "## Plots",
         "",
-        "- plots/theta_distribution.png",
-        "- plots/r_distribution.png",
-        "- plots/h_distribution.png",
-        "- plots/d_arm_arm_distribution.png",
-        "- plots/d_arm_hook_distribution.png",
-        "- plots/d_hook_hook_distribution.png",
-        "- plots/risk_ratio_distribution.png",
-        "- plots/sample_scene_topview.png",
-        "- plots/sample_time_series.png",
+        *plot_lines,
         "",
         "Safety distance thresholds are simulation parameters for controlled experiments, not normative construction-code values.",
     ]

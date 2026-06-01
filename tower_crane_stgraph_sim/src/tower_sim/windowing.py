@@ -159,7 +159,7 @@ def _empty_npz(path: Path) -> None:
         y_traj_feature_names=np.array(Y_TRAJ_FEATURE_NAMES),
         y_risk_feature_names=np.array(Y_RISK_FEATURE_NAMES),
         y_min_distance_feature_names=np.array(Y_MIN_DISTANCE_FEATURE_NAMES),
-        scenario_ids=np.array([], dtype=np.int32),
+        scenario_ids=np.array([], dtype="<U1"),
         scenario_indices=np.array([], dtype=np.int32),
         scenario_business_ids=np.array([], dtype="<U1"),
         scenario_uids=np.array([], dtype="<U1"),
@@ -342,7 +342,7 @@ def make_windows(
             y_traj_feature_names=np.array(Y_TRAJ_FEATURE_NAMES),
             y_risk_feature_names=np.array(Y_RISK_FEATURE_NAMES),
             y_min_distance_feature_names=np.array(Y_MIN_DISTANCE_FEATURE_NAMES),
-            scenario_ids=np.array([s["scenario_id"] for s in split_samples], dtype=np.int32),
+            scenario_ids=np.array([s["scenario_business_id"] for s in split_samples]),
             scenario_indices=np.array([s["scenario_id"] for s in split_samples], dtype=np.int32),
             scenario_business_ids=np.array([s["scenario_business_id"] for s in split_samples]),
             scenario_uids=np.array([s["scenario_uid"] for s in split_samples]),
@@ -351,7 +351,7 @@ def make_windows(
         counts[split] = len(split_samples)
 
     arrays = {
-        split: np.load(output_path / f"{split}_windows.npz", allow_pickle=False)["scenario_ids"]
+        split: np.load(output_path / f"{split}_windows.npz", allow_pickle=False)["scenario_indices"]
         for split in configured_splits
     }
     validate_named_splits_disjoint(arrays)

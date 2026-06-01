@@ -8,7 +8,7 @@ import numpy as np
 
 from tower_sim.dataclasses import Command, CraneGeometry, CraneState, CraneStatic
 from tower_sim.geometry import (
-    constant_velocity_extrapolate,
+    constant_velocity_extrapolate_clamped,
     point_point_distance,
     reconstruct_geometry,
     segment_point_distance,
@@ -29,9 +29,9 @@ def compute_pairwise_edge(
     state_j: CraneState,
     geom_i: CraneGeometry,
     geom_j: CraneGeometry,
-    prev_distances: dict[str, float] | None = None,
     dt: float = 1.0,
     thresholds: dict[str, float] | None = None,
+    h_clearance: float = 2.0,
 ) -> dict[str, float | int]:
     """Compute physical-prior edge features for one ordered crane pair."""
 
@@ -41,8 +41,8 @@ def compute_pairwise_edge(
     d_hook_hook = point_point_distance(geom_i.hook, geom_j.hook)
     d_arm_hook_min = min(d_arm_hook_i_to_j, d_arm_hook_j_to_i)
     dt_safe = max(dt, 1e-6)
-    next_i = constant_velocity_extrapolate(state_i, dt_safe)
-    next_j = constant_velocity_extrapolate(state_j, dt_safe)
+    next_i = constant_velocity_extrapolate_clamped(state_i, static_i, dt_safe, h_clearance=h_clearance)
+    next_j = constant_velocity_extrapolate_clamped(state_j, static_j, dt_safe, h_clearance=h_clearance)
     next_geom_i = reconstruct_geometry(static_i, next_i)
     next_geom_j = reconstruct_geometry(static_j, next_j)
     next_d_arm_arm = segment_segment_distance(next_geom_i.root, next_geom_i.tip, next_geom_j.root, next_geom_j.tip)
@@ -112,17 +112,15 @@ def compute_edges_for_step(
     statics: list[CraneStatic],
     states: dict[int, CraneState],
     geometries: dict[int, CraneGeometry],
-    prev_pair_distances: dict[tuple[int, int], dict[str, float]],
     dt: float,
     thresholds: dict[str, float],
-) -> tuple[list[dict[str, float | int]], dict[tuple[int, int], dict[str, float]]]:
+    h_clearance: float = 2.0,
+) -> list[dict[str, float | int]]:
     """Compute all ordered pair edges for a simulation step."""
 
     rows: list[dict[str, float | int]] = []
-    next_prev: dict[tuple[int, int], dict[str, float]] = {}
     static_by_id = {c.crane_index: c for c in statics}
     for i, j in itertools.permutations(sorted(static_by_id), 2):
-        prev = prev_pair_distances.get((i, j))
         row = compute_pairwise_edge(
             static_by_id[i],
             static_by_id[j],
@@ -130,17 +128,12 @@ def compute_edges_for_step(
             states[j],
             geometries[i],
             geometries[j],
-            prev_distances=prev,
             dt=dt,
             thresholds=thresholds,
+            h_clearance=h_clearance,
         )
         rows.append(row)
-        next_prev[(i, j)] = {
-            "d_arm_arm": float(row["d_arm_arm"]),
-            "d_arm_hook": min(float(row["d_arm_hook_i_to_j"]), float(row["d_arm_hook_j_to_i"])),
-            "d_hook_hook": float(row["d_hook_hook"]),
-        }
-    return rows, next_prev
+    return rows
 
 
 def classify_short_horizon_risk(
@@ -149,6 +142,7 @@ def classify_short_horizon_risk(
     horizon_s: float,
     dt: float,
     thresholds: dict[str, float],
+    h_clearance: float = 2.0,
 ) -> dict[int, str]:
     """Return yielding crane ids and the dominant future risk type."""
 
@@ -161,8 +155,8 @@ def classify_short_horizon_risk(
         pair_priority = 0
         for k in range(1, steps + 1):
             tau = min(horizon_s, k * dt)
-            state_i = constant_velocity_extrapolate(states[i], tau)
-            state_j = constant_velocity_extrapolate(states[j], tau)
+            state_i = constant_velocity_extrapolate_clamped(states[i], static_by_id[i], tau, h_clearance=h_clearance)
+            state_j = constant_velocity_extrapolate_clamped(states[j], static_by_id[j], tau, h_clearance=h_clearance)
             geom_i = reconstruct_geometry(static_by_id[i], state_i)
             geom_j = reconstruct_geometry(static_by_id[j], state_j)
             d_arm_arm = segment_segment_distance(geom_i.root, geom_i.tip, geom_j.root, geom_j.tip)
@@ -193,10 +187,11 @@ def short_horizon_risk_pairs(
     horizon_s: float,
     dt: float,
     thresholds: dict[str, float],
+    h_clearance: float = 2.0,
 ) -> set[int]:
     """Return crane ids that should yield based on constant-velocity short extrapolation."""
 
-    return set(classify_short_horizon_risk(statics, states, horizon_s, dt, thresholds))
+    return set(classify_short_horizon_risk(statics, states, horizon_s, dt, thresholds, h_clearance=h_clearance))
 
 
 def avoidance_command_for_risk(command: Command, risk_type: str, static: CraneStatic) -> Command:
@@ -232,6 +227,7 @@ def apply_avoidance(
         float(interaction_cfg["short_horizon_check_s"]),
         dt,
         config["risk_thresholds"],
+        h_clearance=float(config.get("dynamics", {}).get("hook_clearance_m", 2.0)),
     )
     updated: dict[int, Command] = {}
     fail_prob = float(interaction_cfg.get("avoidance_failure_probability", 0.0))

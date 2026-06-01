@@ -51,7 +51,7 @@ The YAML configuration controls:
 - `crane_static`: tower height, jib length, trolley radius limits, load capacity, safety-distance parameters
 - `motion_limits`: angular/trolley/hoist speed and acceleration limits plus first-order response time
 - `load_effect`: load-dependent acceleration scaling
-- `dynamics`: emergency braking scale and other dynamic response parameters
+- `dynamics`: emergency braking scale, hook clearance, and other dynamic response parameters
 - `task_generation`: pickup/dropoff heights, transport height, task count, load ratios, stage tolerance
 - `controller`: proportional command gains and smoothing
 - `interaction`: online short-horizon avoidance, failure/error probabilities, priority policy
@@ -107,7 +107,7 @@ Feature-name arrays are stored in every npz:
 - `y_risk_feature_names`
 - `y_min_distance_feature_names`
 
-Window files include integer `scenario_ids` and `scenario_indices` for existing training code, plus string `scenario_business_ids` and `scenario_uids` for schema-level traceability.
+Window files include string business `scenario_ids`, integer `scenario_indices`, and compatibility aliases `scenario_business_ids` and `scenario_uids` for schema-level traceability.
 
 Node inputs use `sin(theta)` and `cos(theta)` rather than raw `theta` to avoid angle wrap discontinuity.
 
@@ -136,7 +136,7 @@ Inspect:
 outputs/debug_small/run_YYYYMMDD_HHMMSS/quality/quality_report.md
 ```
 
-The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, split exclusivity, leakage checks, tail-label `inf` checks, no-overlap consistency checks, seed, and `config_used.yaml` path. The generator also writes `risk_ratio_by_scenario.csv` and `feature_summary.csv` in the same quality directory.
+The report includes scenario count, crane-count distribution, total simulated time, sampling frequency, task count, risk positive ratios, state distributions, distance distributions, NaN checks, boundary checks, velocity/acceleration checks, all-split exclusivity including optional generalization windows, leakage checks, tail-label `inf` checks, no-overlap consistency checks, seed, and `config_used.yaml` path. The generator also writes `risk_ratio_by_scenario.csv` and `feature_summary.csv` in the same quality directory.
 
 `same_height_risk_zone` is an edge feature indicating close jib-root heights together with plan-view operating-radius overlap. It is not a universal height-risk label for arm-hook or hook-hook risk.
 
@@ -183,7 +183,7 @@ They avoid discontinuity around `0` and `2*pi`.
 
 **Can I generate parquet instead of CSV?**
 
-Yes. Set `simulation.save_format` to include `parquet`. Downstream scripts read CSV first and fall back to Parquet when CSV is absent. Windows are always written as `.npz`; `npz` in `save_format` documents that window output is part of the run, not a table format.
+Yes. Set `simulation.save_format` to include `parquet`. Downstream scripts read CSV first and fall back to Parquet when CSV is absent. `simulation.save_format` must include at least one table format, `csv` or `parquet`; `npz` only documents that window output is part of the run and cannot be used as the sole format.
 
 **Does `emergency_flag` change the motion?**
 

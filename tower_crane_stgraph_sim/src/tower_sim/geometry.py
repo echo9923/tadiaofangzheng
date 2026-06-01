@@ -156,3 +156,29 @@ def constant_velocity_extrapolate(state: CraneState, horizon_s: float) -> CraneS
         task_index=state.task_index,
         task_stage=state.task_stage,
     )
+
+
+def constant_velocity_extrapolate_clamped(
+    state: CraneState,
+    static: CraneStatic,
+    horizon_s: float,
+    h_clearance: float = 2.0,
+    h_min: float = 0.0,
+) -> CraneState:
+    """Return a constant-velocity extrapolation clamped to crane travel limits."""
+
+    return CraneState(
+        theta=wrap_to_pi(state.theta + state.theta_dot * horizon_s),
+        r=float(np.clip(state.r + state.r_dot * horizon_s, static.min_radius, static.max_radius)),
+        h=float(np.clip(state.h + state.h_dot * horizon_s, h_min, static.tower_height - h_clearance)),
+        theta_dot=state.theta_dot,
+        r_dot=state.r_dot,
+        h_dot=state.h_dot,
+        theta_ddot=0.0,
+        r_ddot=0.0,
+        h_ddot=0.0,
+        load_weight=state.load_weight,
+        task_id=state.task_id,
+        task_index=state.task_index,
+        task_stage=state.task_stage,
+    )

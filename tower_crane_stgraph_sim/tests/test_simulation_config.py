@@ -97,6 +97,8 @@ def test_default_config_is_formal_dataset_configuration() -> None:
     assert config["simulation"]["num_cranes_range"] == [3, 6]
     assert config["simulation"]["save_format"] == ["csv", "parquet", "npz"]
     assert config["task_generation"]["tasks_per_crane_range"] == [4, 12]
+    assert config["dynamics"]["hook_clearance_m"] == 2.0
+    assert config["quality_control"]["target_risk_ratio_range"] == [0.10, 0.30]
     assert config["quality_control"]["fail_on_risk_ratio_out_of_range"] is True
 
 
@@ -109,6 +111,8 @@ def test_debug_configs_use_full_yaml_schema() -> None:
         assert isinstance(config["task_generation"]["transport_height_ratio"], list)
         assert config["controller"]["command_smoothing"] is True
         assert "command_smoothing_alpha" in config["controller"]
+        assert config["dynamics"]["hook_clearance_m"] == 2.0
+        assert config["quality_control"]["target_risk_ratio_range"] == [0.0, 0.80]
         assert config["quality_control"]["fail_on_risk_ratio_out_of_range"] is False
 
 
@@ -126,6 +130,13 @@ def test_configured_save_formats_normalize_and_reject_unknown_values() -> None:
         assert "save_format" in str(exc)
     else:
         raise AssertionError("Expected unknown save_format to be rejected")
+
+    try:
+        _configured_save_formats({"simulation": {"save_format": ["npz"]}})
+    except ValueError as exc:
+        assert "csv or parquet" in str(exc)
+    else:
+        raise AssertionError("Expected save_format without a table format to be rejected")
 
 
 def test_simulate_dataset_outputs_formal_ids_and_window_scenario_uids() -> None:
@@ -166,8 +177,10 @@ def test_simulate_dataset_outputs_formal_ids_and_window_scenario_uids() -> None:
     assert edge_future_label["crane_j"].map(lambda value: isinstance(value, str) and value.startswith("crane_")).all()
 
     with np.load(output_dir / "windows" / "train_windows.npz", allow_pickle=False) as data:
-        assert data["scenario_ids"].dtype.kind in {"i", "u"}
+        assert data["scenario_ids"].dtype.kind in {"U", "S"}
+        assert set(data["scenario_ids"].tolist()) == {"scenario_000000"}
         assert "scenario_indices" in data.files
+        assert data["scenario_indices"].dtype.kind in {"i", "u"}
         assert "scenario_business_ids" in data.files
         assert "scenario_uids" in data.files
         assert data["scenario_business_ids"].dtype.kind in {"U", "S"}

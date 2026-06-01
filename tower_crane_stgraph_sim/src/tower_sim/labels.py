@@ -40,6 +40,22 @@ def _distances(static_i: dict[str, Any], static_j: dict[str, Any], state_i: dict
     )
 
 
+def _geometry_distances(geom_i: Any, geom_j: Any) -> tuple[float, float, float, float]:
+    return (
+        segment_segment_distance(geom_i.root, geom_i.tip, geom_j.root, geom_j.tip),
+        segment_point_distance(geom_i.root, geom_i.tip, geom_j.hook),
+        segment_point_distance(geom_j.root, geom_j.tip, geom_i.hook),
+        point_point_distance(geom_i.hook, geom_j.hook),
+    )
+
+
+def _first_below(values: list[float], threshold: float, dt: float) -> float:
+    for idx, value in enumerate(values, start=1):
+        if value < threshold:
+            return idx * dt
+    return -1.0
+
+
 def compute_future_labels(
     state_true: pd.DataFrame,
     crane_static: pd.DataFrame,
@@ -77,49 +93,61 @@ def compute_future_labels(
             timestamp_by_step[step] = float(row["timestamp"])
         sorted_steps = sorted(state_by_step)
         crane_ids = sorted(static_rows)
+        geometry_by_step: dict[int, dict[int, Any]] = {}
+        for step, states_by_crane in state_by_step.items():
+            geometry_by_step[step] = {
+                crane_id: reconstruct_geometry_from_rows(static_rows[crane_id], state_row)
+                for crane_id, state_row in states_by_crane.items()
+                if crane_id in static_rows
+            }
+        distances_by_pair: dict[tuple[int, int], dict[int, tuple[float, float, float, float]]] = {}
+        for i, j in itertools.permutations(crane_ids, 2):
+            pair_distances: dict[int, tuple[float, float, float, float]] = {}
+            for step in sorted_steps:
+                if i in geometry_by_step[step] and j in geometry_by_step[step]:
+                    pair_distances[step] = _geometry_distances(geometry_by_step[step][i], geometry_by_step[step][j])
+            distances_by_pair[(i, j)] = pair_distances
+
+        label_payloads: dict[tuple[int, float, int, int], tuple[float, float, float, float, float, float, float]] = {}
+        for (i, j), pair_distances in distances_by_pair.items():
+            for step in sorted_steps:
+                for horizon_s in horizons_s:
+                    horizon_steps = max(1, int(round(float(horizon_s) / dt)))
+                    future_steps = [future for future in sorted_steps if step < future <= step + horizon_steps]
+                    if len(future_steps) < horizon_steps or any(future not in pair_distances for future in future_steps):
+                        continue
+                    distance_window = [pair_distances[future] for future in future_steps]
+                    arm_arm = [values[0] for values in distance_window]
+                    arm_hook_i_to_j = [values[1] for values in distance_window]
+                    arm_hook_j_to_i = [values[2] for values in distance_window]
+                    hook_hook = [values[3] for values in distance_window]
+                    arm_hook_min = [min(left, right) for left, right in zip(arm_hook_i_to_j, arm_hook_j_to_i, strict=True)]
+                    label_payloads[(step, float(horizon_s), i, j)] = (
+                        min(arm_arm),
+                        min(arm_hook_i_to_j),
+                        min(arm_hook_j_to_i),
+                        min(hook_hook),
+                        _first_below(arm_arm, float(thresholds["d_safe_arm_arm_m"]), dt),
+                        _first_below(arm_hook_min, float(thresholds["d_safe_arm_hook_m"]), dt),
+                        _first_below(hook_hook, float(thresholds["d_safe_hook_hook_m"]), dt),
+                    )
+
         for step in sorted_steps:
             for horizon_s in horizons_s:
-                horizon_steps = max(1, int(round(float(horizon_s) / dt)))
-                future_steps = [future for future in sorted_steps if step < future <= step + horizon_steps]
-                if len(future_steps) < horizon_steps:
-                    continue
+                horizon_s_float = float(horizon_s)
                 for i, j in itertools.permutations(crane_ids, 2):
-                    min_arm_arm = math.inf
-                    min_arm_hook_i_to_j = math.inf
-                    min_arm_hook_j_to_i = math.inf
-                    min_hook_hook = math.inf
-                    ttc_arm_arm = -1.0
-                    ttc_arm_hook = -1.0
-                    ttc_hook_hook = -1.0
-                    for future in future_steps:
-                        if i not in state_by_step[future] or j not in state_by_step[future]:
-                            min_arm_arm = math.inf
-                            break
-                        d_arm_arm, d_arm_hook_i_to_j, d_arm_hook_j_to_i, d_hook_hook = _distances(
-                            static_rows[i],
-                            static_rows[j],
-                            state_by_step[future][i],
-                            state_by_step[future][j],
-                        )
-                        elapsed = (future - step) * dt
-                        if d_arm_arm < min_arm_arm:
-                            min_arm_arm = d_arm_arm
-                        if d_arm_hook_i_to_j < min_arm_hook_i_to_j:
-                            min_arm_hook_i_to_j = d_arm_hook_i_to_j
-                        if d_arm_hook_j_to_i < min_arm_hook_j_to_i:
-                            min_arm_hook_j_to_i = d_arm_hook_j_to_i
-                        if d_hook_hook < min_hook_hook:
-                            min_hook_hook = d_hook_hook
-                        if ttc_arm_arm < 0.0 and d_arm_arm < float(thresholds["d_safe_arm_arm_m"]):
-                            ttc_arm_arm = elapsed
-                        if ttc_arm_hook < 0.0 and min(d_arm_hook_i_to_j, d_arm_hook_j_to_i) < float(
-                            thresholds["d_safe_arm_hook_m"]
-                        ):
-                            ttc_arm_hook = elapsed
-                        if ttc_hook_hook < 0.0 and d_hook_hook < float(thresholds["d_safe_hook_hook_m"]):
-                            ttc_hook_hook = elapsed
-                    if math.isinf(min_arm_arm) or math.isinf(min_arm_hook_i_to_j) or math.isinf(min_arm_hook_j_to_i) or math.isinf(min_hook_hook):
+                    payload = label_payloads.get((step, horizon_s_float, i, j))
+                    if payload is None:
                         continue
+                    (
+                        min_arm_arm,
+                        min_arm_hook_i_to_j,
+                        min_arm_hook_j_to_i,
+                        min_hook_hook,
+                        ttc_arm_arm,
+                        ttc_arm_hook,
+                        ttc_hook_hook,
+                    ) = payload
                     crane_i_id = str(static_rows[i].get("crane_id", crane_id_from_index(i)))
                     crane_j_id = str(static_rows[j].get("crane_id", crane_id_from_index(j)))
                     rows.append(
@@ -129,7 +157,7 @@ def compute_future_labels(
                             "scenario_index": scenario_index_int,
                             "timestamp": timestamp_by_step[step],
                             "step": int(step),
-                            "horizon_s": float(horizon_s),
+                            "horizon_s": horizon_s_float,
                             "crane_i": crane_i_id,
                             "crane_j": crane_j_id,
                             "crane_i_uid": crane_i_id,

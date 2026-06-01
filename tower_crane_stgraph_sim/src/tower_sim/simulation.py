@@ -306,7 +306,7 @@ Per-step reconstructed jib root, jib tip, and hook coordinates for every crane.
 
 `scenario_id`, `scenario_uid`, `scenario_index`, `timestamp`, `step`, `crane_i`, `crane_j`, `crane_i_uid`, `crane_j_uid`, `crane_i_index`, `crane_j_index`, `d_arm_arm`, `d_arm_hook_i_to_j`, `d_arm_hook_j_to_i`, `d_hook_hook`, `delta_theta`, `delta_theta_dot`, `delta_r`, `delta_h`, `delta_tower_height`, `base_distance`, `overlap_ratio`, `relative_approach_speed`, `relative_approach_speed_arm_arm`, `relative_approach_speed_arm_hook`, `relative_approach_speed_hook_hook`, `ttc_est_arm_arm`, `ttc_est_arm_hook`, `ttc_est_hook_hook`, `same_height_risk_zone`.
 
-Current-time physical-prior edge features computed from current geometry and current velocity extrapolation. These fields are allowed as model inputs. `ttc_est_*` is current-state-only and is not a future label. `same_height_risk_zone` means the two jib-root heights are close and the plan-view operating radii overlap; it is not a universal height-risk label for all risk types.
+Current-time physical-prior edge features computed from current geometry and boundary-clamped current velocity extrapolation. These fields are allowed as model inputs. `ttc_est_*` is current-state-only and is not a future label. `same_height_risk_zone` means the two jib-root heights are close and the plan-view operating radii overlap; it is not a universal height-risk label for all risk types.
 
 ## edge_future_label.csv
 
@@ -332,7 +332,9 @@ Sliding-window tensors. `node_features` and `edge_features` are inputs. `y_traj`
 - `y_risk`: {Y_RISK_FEATURE_NAMES}
 - `y_min_distance`: {Y_MIN_DISTANCE_FEATURE_NAMES}
 
-Train/validation/test splits are by `scenario_id`; never mix windows from one scenario across splits. When `split.add_generalization_test` is enabled, `windows/generalization_windows.npz` is generated from held-out scenario ids.
+`scenario_ids` stores string business ids such as `scenario_000042`; `scenario_indices` stores integer scenario indexes for tensor joins and legacy training code. `scenario_business_ids` and `scenario_uids` are compatibility aliases for the string ids.
+
+Train/validation/test/generalization splits are by scenario; never mix windows from one scenario across splits. When `split.add_generalization_test` is enabled, `windows/generalization_windows.npz` is generated from held-out scenario ids.
 """
     output_path.write_text(content, encoding="utf-8")
 
@@ -349,6 +351,8 @@ def _configured_save_formats(config: dict[str, Any]) -> set[str]:
     unknown = formats - allowed
     if unknown:
         raise ValueError(f"simulation.save_format contains unsupported values: {sorted(unknown)}")
+    if not ({"csv", "parquet"} & formats):
+        raise ValueError("simulation.save_format must include at least one table format: csv or parquet")
     return formats
 
 
@@ -437,7 +441,6 @@ def _simulate_one_scenario(
                 task_stage="transport_to_dropoff",
             )
     prev_commands: dict[int, Command] = {}
-    prev_pair_min: dict[tuple[int, int], dict[str, float]] = {}
     avoidance_delay_counters: dict[int, int] = {}
     state_rows: list[dict[str, Any]] = []
     geometry_rows: list[dict[str, Any]] = []
@@ -475,7 +478,7 @@ def _simulate_one_scenario(
                 static_by_id[crane_index],
                 commands[crane_index],
                 dt=dt,
-                h_clearance=2.0,
+                h_clearance=float(config.get("dynamics", {}).get("hook_clearance_m", 2.0)),
                 h_min=0.0,
                 min_acc_scale=float(config["load_effect"].get("min_acc_scale", 0.5))
                 if bool(config["load_effect"].get("enabled", True))
@@ -488,13 +491,13 @@ def _simulate_one_scenario(
             geometry_rows.append(_geometry_row(scenario_index, timestamp, step, crane_index, static_by_id[crane_index], next_state))
 
         geometries = {cid: reconstruct_geometry(static_by_id[cid], state) for cid, state in next_states.items()}
-        pair_rows, prev_pair_min = compute_edges_for_step(
+        pair_rows = compute_edges_for_step(
             cranes,
             next_states,
             geometries,
-            prev_pair_min,
             dt=dt,
             thresholds=config["risk_thresholds"],
+            h_clearance=float(config.get("dynamics", {}).get("hook_clearance_m", 2.0)),
         )
         for row in pair_rows:
             edge_rows.append(

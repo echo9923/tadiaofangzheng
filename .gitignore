@@ -13,3 +13,7 @@ dist/
 *.egg-info/
 .env
 .DS_Store
+
+# Local tool state
+.superpowers/
+.claude/

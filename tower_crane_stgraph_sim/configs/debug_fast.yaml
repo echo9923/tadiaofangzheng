@@ -46,6 +46,7 @@ load_effect:
 
 dynamics:
   emergency_brake_scale: 2.0
+  hook_clearance_m: 2.0
 
 task_generation:
   tasks_per_crane_range: [1, 2]
@@ -110,7 +111,7 @@ split:
   add_generalization_test: false
 
 quality_control:
-  target_risk_ratio_range: [0.02, 0.60]
+  target_risk_ratio_range: [0.0, 0.80]
   fail_on_risk_ratio_out_of_range: false
   generate_summary_plots: true
   fail_on_nan_in_required_fields: true

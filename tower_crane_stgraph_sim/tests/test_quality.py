@@ -124,6 +124,86 @@ def test_quality_gate_raises_on_integrity_failures() -> None:
         raise AssertionError("Expected quality gate to reject non-disjoint split")
 
 
+def test_quality_report_checks_generalization_split_disjointness() -> None:
+    output_dir = Path("test_artifacts") / f"quality_split_{uuid.uuid4().hex}"
+    output_dir.mkdir(parents=True)
+    scenario_table = pd.DataFrame(
+        [
+            {"scenario_id": "scenario_000001", "scenario_index": 1, "scenario_uid": "scenario_000001", "num_cranes": 2, "duration_s": 1.0, "split": "train"},
+            {"scenario_id": "scenario_000001", "scenario_index": 1, "scenario_uid": "scenario_000001", "num_cranes": 2, "duration_s": 1.0, "split": "generalization"},
+        ]
+    )
+    crane_static = pd.DataFrame()
+    state_true = pd.DataFrame()
+    edge_current = pd.DataFrame()
+    edge_future_label = pd.DataFrame()
+
+    try:
+        generate_quality_report(
+            output_dir,
+            scenario_table,
+            crane_static,
+            pd.DataFrame(),
+            state_true,
+            state_true,
+            edge_current,
+            edge_future_label,
+            {
+                "simulation": {"dt": 1.0},
+                "project": {"random_seed": 1},
+                "quality_control": {
+                    "target_risk_ratio_range": [0.0, 1.0],
+                    "generate_summary_plots": False,
+                },
+            },
+            geometry_table=pd.DataFrame(),
+        )
+    except ValueError as exc:
+        assert "split_disjoint" in str(exc)
+    else:
+        raise AssertionError("Expected quality gate to reject overlap with generalization split")
+
+
+def test_generate_quality_report_skips_plots_when_disabled() -> None:
+    output_dir = Path("test_artifacts") / f"quality_no_plots_{uuid.uuid4().hex}"
+    output_dir.mkdir(parents=True)
+    scenario_table = pd.DataFrame(
+        [
+            {
+                "scenario_id": 0,
+                "scenario_uid": "scenario_000000",
+                "num_cranes": 2,
+                "duration_s": 1.0,
+                "split": "train",
+            }
+        ]
+    )
+
+    stats = generate_quality_report(
+        output_dir,
+        scenario_table,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {
+            "simulation": {"dt": 1.0},
+            "project": {"random_seed": 1},
+            "quality_control": {
+                "target_risk_ratio_range": [0.0, 1.0],
+                "generate_summary_plots": False,
+            },
+        },
+        geometry_table=pd.DataFrame(),
+    )
+
+    assert stats["split_disjoint"] is True
+    assert not (output_dir / "plots").exists()
+    assert "Plots disabled" in (output_dir / "quality_report.md").read_text(encoding="utf-8")
+
+
 def test_quality_report_allows_configured_emergency_braking_acceleration() -> None:
     output_dir = Path("test_artifacts") / f"quality_emergency_{uuid.uuid4().hex}"
     output_dir.mkdir(parents=True)

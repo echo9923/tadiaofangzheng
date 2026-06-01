@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
 parquet = ["pyarrow>=14.0"]
+visual = ["streamlit>=1.30"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

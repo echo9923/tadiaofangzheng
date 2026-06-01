@@ -146,6 +146,33 @@ Quality plots are written to:
 outputs/<base_dir>/<run_name>/quality/plots/
 ```
 
+## 可视化界面
+
+仓库包含一个基于 Streamlit 的浏览器可视化验收界面，以及位于 `tower_sim.visualization` 下的可测试后端模块。后端既能加载正式 run 布局（`tables/`、`windows/`、`quality/`），也兼容旧版平铺的 `outputs/debug_small` 布局。
+
+安装可选界面依赖：
+
+```bash
+python -m pip install -e ".[visual]"
+```
+
+启动可视化界面：
+
+```bash
+streamlit run apps/visual_dashboard.py
+```
+
+界面包含运行总览、动画播放器、风险解释器、训练窗口查看器、质量视图和数据浏览器。输入视图只使用 `state_obs` 和 `edge_current`；标签视图和调试视图会展示 `edge_future_label`，但这些内容只作为标签验收证据，不能作为模型输入。
+
+如果需要非交互导出或自动化检查，可以直接使用这些 Python 模块：
+
+- `tower_sim.visualization.loaders.RunDataRepository`
+- `tower_sim.visualization.animation_player`
+- `tower_sim.visualization.risk_events`
+- `tower_sim.visualization.window_view`
+- `tower_sim.visualization.quality_view`
+- `tower_sim.visualization.export`
+
 ## Using With ST-GNN or Transformer Models
 
 A typical model pipeline is:

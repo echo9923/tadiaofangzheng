@@ -1,0 +1,24 @@
+visualization:
+  default_run_root: outputs/debug_small
+  prefer_format: parquet
+  max_points_per_curve: 2000
+  playback:
+    default_speed: 1.0
+    available_speeds: [0.5, 1.0, 2.0, 5.0, 10.0]
+    risk_clip_pre_seconds: 10.0
+    risk_clip_post_seconds: 10.0
+  topview:
+    show_base: true
+    show_jib: true
+    show_hook: true
+    show_radius: true
+    show_task_points: true
+    show_edge: true
+    trail_seconds: 20.0
+  risk:
+    default_horizon_s: 10.0
+    show_threshold_lines: true
+    risk_types: [arm_arm, arm_hook_i_to_j, arm_hook_j_to_i, hook_hook]
+  export:
+    dpi: 300
+    output_dir: exports

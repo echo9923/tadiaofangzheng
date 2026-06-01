@@ -10,6 +10,27 @@ from tower_sim.visualization.i18n_zh import field_label, risk_type_label, view_m
 from tower_sim.visualization.schemas import AnimationFrame, RISK_TYPE_SPECS, RiskTypeSpec
 
 
+DEFAULT_PLOTLY_LAYERS = {
+    "radius": True,
+    "tasks": True,
+    "edges": True,
+    "future_risk": True,
+    "trail": True,
+    "height_text": True,
+    "distance_curve": True,
+}
+
+
+def _try_import_plotly():
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        return go, make_subplots
+    except Exception as exc:
+        raise RuntimeError("未安装 Plotly。请运行 `python -m pip install -e \".[visual]\"` 后再使用 2.5D 动画播放器。") from exc
+
+
 def _try_import_pyplot():
     try:
         cache_dir = Path(os.environ.get("MPLCONFIGDIR", str(Path.cwd() / ".matplotlib_cache")))
@@ -185,6 +206,299 @@ def _task_point(base: pd.Series, row: pd.Series, prefix: str) -> tuple[float, fl
     )
 
 
+def _id_matches(left: Any, right: Any) -> bool:
+    if str(left) == str(right):
+        return True
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _geometry_row(geometry: pd.DataFrame, crane: Any) -> pd.Series | None:
+    if geometry.empty:
+        return None
+    for column in ["crane_id", "crane_index"]:
+        if column not in geometry.columns:
+            continue
+        for _, row in geometry.iterrows():
+            if _id_matches(row[column], crane):
+                return row
+    return None
+
+
+def _edge_row(edges: pd.DataFrame, pair: tuple[Any, Any] | None) -> pd.Series | None:
+    if pair is None or edges.empty or not {"crane_i", "crane_j"}.issubset(edges.columns):
+        return None
+    for _, row in edges.iterrows():
+        if _id_matches(row["crane_i"], pair[0]) and _id_matches(row["crane_j"], pair[1]):
+            return row
+    return None
+
+
+def _label_row(labels: pd.DataFrame | None, pair: tuple[Any, Any] | None) -> pd.Series | None:
+    if pair is None or labels is None or labels.empty or not {"crane_i", "crane_j"}.issubset(labels.columns):
+        return None
+    for _, row in labels.iterrows():
+        if _id_matches(row["crane_i"], pair[0]) and _id_matches(row["crane_j"], pair[1]):
+            return row
+    return None
+
+
+def _risk_positive(row: pd.Series | None) -> bool:
+    if row is None:
+        return False
+    for spec in RISK_TYPE_SPECS.values():
+        if spec.risk_column in row and float(row.get(spec.risk_column, 0) or 0) > 0:
+            return True
+    return False
+
+
+def _selected_pair_label(pair: tuple[Any, Any] | None) -> str:
+    if pair is None:
+        return "未选择塔吊对"
+    return f"{pair[0]} -> {pair[1]}"
+
+
+def _sample_steps(steps: list[int], max_frames: int) -> tuple[list[int], bool]:
+    if len(steps) <= max_frames:
+        return steps, False
+    stride = max(1, (len(steps) + max_frames - 1) // max_frames)
+    sampled = steps[::stride]
+    if steps[-1] not in sampled:
+        sampled.append(steps[-1])
+    return sampled[:max_frames], True
+
+
+def _plotly_frame_traces(
+    go: Any,
+    frame: AnimationFrame,
+    *,
+    selected_pair: tuple[Any, Any] | None,
+    trail: pd.DataFrame,
+    edge_series: pd.DataFrame,
+    layers: dict[str, bool],
+) -> list[Any]:
+    traces: list[Any] = []
+    static_lookup = _crane_lookup(frame.static)
+    selected_ids = {str(selected_pair[0]), str(selected_pair[1])} if selected_pair is not None else set()
+
+    if layers.get("radius", True):
+        for _, row in frame.static.iterrows():
+            base_x = float(row["base_x"])
+            base_y = float(row["base_y"])
+            for radius_col, dash in [("max_radius", "solid"), ("min_radius", "dash")]:
+                if radius_col not in row:
+                    continue
+                radius = float(row[radius_col])
+                traces.append(
+                    go.Scatter(
+                        x=[base_x + radius * __import__("math").cos(t) for t in [i * 6.28318530718 / 72 for i in range(73)]],
+                        y=[base_y + radius * __import__("math").sin(t) for t in [i * 6.28318530718 / 72 for i in range(73)]],
+                        mode="lines",
+                        line={"color": "#9ca3af", "width": 1, "dash": dash},
+                        opacity=0.28,
+                        name=field_label(radius_col),
+                        showlegend=False,
+                        xaxis="x",
+                        yaxis="y",
+                    )
+                )
+
+    if layers.get("tasks", True):
+        for _, row in frame.tasks.iterrows():
+            crane_key = row.get("crane_index", row.get("crane_id"))
+            base = static_lookup.get(crane_key)
+            if base is None:
+                base = static_lookup.get(str(row.get("crane_id", crane_key)))
+            if base is None:
+                continue
+            pickup = _task_point(base, row, "pickup")
+            dropoff = _task_point(base, row, "dropoff")
+            if pickup is not None:
+                traces.append(go.Scatter(x=[pickup[0]], y=[pickup[1]], mode="markers", marker={"symbol": "triangle-up", "size": 9, "color": "#b7791f"}, name="取货点", showlegend=False, xaxis="x", yaxis="y"))
+            if dropoff is not None:
+                traces.append(go.Scatter(x=[dropoff[0]], y=[dropoff[1]], mode="markers", marker={"symbol": "square", "size": 8, "color": "#2f855a"}, name="卸货点", showlegend=False, xaxis="x", yaxis="y"))
+
+    if layers.get("trail", True) and not trail.empty:
+        for crane_id, data in trail.groupby("crane_id" if "crane_id" in trail.columns else "crane_index"):
+            traces.append(
+                go.Scatter(
+                    x=data["hook_x"],
+                    y=data["hook_y"],
+                    mode="lines",
+                    line={"color": "#64748b", "width": 1},
+                    opacity=0.38,
+                    name=f"轨迹 {crane_id}",
+                    showlegend=False,
+                    xaxis="x",
+                    yaxis="y",
+                )
+            )
+
+    if layers.get("edges", True):
+        geometry_lookup = _crane_lookup(frame.geometry)
+        for _, row in frame.edges.iterrows():
+            left = geometry_lookup.get(row.get("crane_i_index", row.get("crane_i")))
+            if left is None:
+                left = geometry_lookup.get(str(row.get("crane_i")))
+            right = geometry_lookup.get(row.get("crane_j_index", row.get("crane_j")))
+            if right is None:
+                right = geometry_lookup.get(str(row.get("crane_j")))
+            if left is None or right is None:
+                continue
+            is_selected = selected_pair is not None and _id_matches(row.get("crane_i"), selected_pair[0]) and _id_matches(row.get("crane_j"), selected_pair[1])
+            min_distance = min(float(row.get(col, 9999.0)) for col in ["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"])
+            color = "#dc2626" if is_selected else "#d97706" if min_distance < 5.0 else "#94a3b8"
+            width = 3 if is_selected else 1
+            traces.append(go.Scatter(x=[float(left["hook_x"]), float(right["hook_x"])], y=[float(left["hook_y"]), float(right["hook_y"])], mode="lines", line={"color": color, "width": width}, opacity=0.65, name="当前边", showlegend=False, xaxis="x", yaxis="y"))
+
+    if layers.get("future_risk", True) and frame.labels is not None and not frame.labels.empty:
+        geometry_lookup = _crane_lookup(frame.geometry)
+        for _, row in frame.labels.iterrows():
+            if not _risk_positive(row):
+                continue
+            left = geometry_lookup.get(row.get("crane_i_index", row.get("crane_i")))
+            if left is None:
+                left = geometry_lookup.get(str(row.get("crane_i")))
+            right = geometry_lookup.get(row.get("crane_j_index", row.get("crane_j")))
+            if right is None:
+                right = geometry_lookup.get(str(row.get("crane_j")))
+            if left is None or right is None:
+                continue
+            traces.append(go.Scatter(x=[float(left["hook_x"]), float(right["hook_x"])], y=[float(left["hook_y"]), float(right["hook_y"])], mode="lines", line={"color": "#be123c", "width": 3, "dash": "dash"}, opacity=0.88, name="未来风险边", showlegend=False, xaxis="x", yaxis="y"))
+
+    for _, row in frame.geometry.iterrows():
+        crane_id = row.get("crane_id", row.get("crane_index", ""))
+        is_selected = str(crane_id) in selected_ids
+        color = "#0f766e" if is_selected else "#2563eb"
+        width = 4 if is_selected else 2
+        traces.append(go.Scatter(x=[row["root_x"], row["tip_x"]], y=[row["root_y"], row["tip_y"]], mode="lines", line={"color": color, "width": width}, name=f"吊臂 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+        text = f"{crane_id}<br>h={float(row.get('hook_z', 0.0)):.1f}m" if layers.get("height_text", True) else str(crane_id)
+        traces.append(go.Scatter(x=[row["hook_x"]], y=[row["hook_y"]], mode="markers+text", marker={"symbol": "x", "size": 11, "color": "#c2410c"}, text=[text], textposition="top center", name=f"吊钩 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+
+    for _, row in frame.static.iterrows():
+        crane_id = row.get("crane_id", row.get("crane_index", ""))
+        traces.append(go.Scatter(x=[row["base_x"]], y=[row["base_y"]], mode="markers+text", marker={"size": 9, "color": "#1f2937"}, text=[str(crane_id)], textposition="middle right", name=f"基座 {crane_id}", showlegend=False, xaxis="x", yaxis="y"))
+
+    row_i = _geometry_row(frame.geometry, selected_pair[0]) if selected_pair is not None else None
+    row_j = _geometry_row(frame.geometry, selected_pair[1]) if selected_pair is not None else None
+    if row_i is not None and row_j is not None:
+        labels = [str(selected_pair[0]), str(selected_pair[1])]
+        root_z = [float(row_i.get("root_z", 0.0)), float(row_j.get("root_z", 0.0))]
+        hook_z = [float(row_i.get("hook_z", 0.0)), float(row_j.get("hook_z", 0.0))]
+        traces.append(go.Bar(x=labels, y=root_z, marker_color="#4c78a8", name="臂根高度", xaxis="x2", yaxis="y2"))
+        traces.append(go.Bar(x=labels, y=hook_z, marker_color="#f58518", name="吊钩高度", xaxis="x2", yaxis="y2"))
+    else:
+        traces.append(go.Scatter(x=[], y=[], mode="markers", name="高度剖面", xaxis="x2", yaxis="y2"))
+
+    if layers.get("distance_curve", True) and not edge_series.empty:
+        x_col = "timestamp" if "timestamp" in edge_series.columns else "step"
+        for column, color in zip(["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"], ["#4c78a8", "#f58518", "#54a24b", "#b279a2"], strict=True):
+            if column in edge_series.columns:
+                traces.append(go.Scatter(x=edge_series[x_col], y=edge_series[column], mode="lines", line={"color": color, "width": 1.5}, name=field_label(column), xaxis="x3", yaxis="y3"))
+        traces.append(go.Scatter(x=[frame.timestamp, frame.timestamp], y=[0, max(1.0, float(edge_series[[c for c in ["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"] if c in edge_series]].max().max()))], mode="lines", line={"color": "#111827", "width": 1, "dash": "dot"}, name="当前时刻", showlegend=False, xaxis="x3", yaxis="y3"))
+    else:
+        traces.append(go.Scatter(x=[], y=[], mode="lines", name="距离曲线", xaxis="x3", yaxis="y3"))
+    return traces
+
+
+def plotly_25d_animation_for_scenario(
+    cache: Any,
+    *,
+    steps: list[int] | None = None,
+    selected_pair: tuple[Any, Any] | None = None,
+    layers: dict[str, bool] | None = None,
+    trail_seconds: float = 20.0,
+    max_frames: int = 300,
+) -> tuple[Any, bool]:
+    """Build a Plotly 2.5D animation figure for one cached scenario."""
+
+    go, make_subplots = _try_import_plotly()
+    active_layers = {**DEFAULT_PLOTLY_LAYERS, **(layers or {})}
+    source_steps = steps or cache.steps
+    sampled_steps, sampled = _sample_steps([int(step) for step in source_steps], max_frames=max_frames)
+    if not sampled_steps:
+        fig = go.Figure()
+        return fig, False
+    first_frame = cache.get_frame(sampled_steps[0])
+    pair = selected_pair or cache.strongest_risk_pair(sampled_steps[0])
+    edge_series = cache.edge_series_for_pair(*pair) if pair is not None else pd.DataFrame()
+
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        specs=[[{"rowspan": 2}, {}], [None, {}]],
+        column_widths=[0.68, 0.32],
+        row_heights=[0.46, 0.54],
+        subplot_titles=("x-y 俯视动画", f"高度剖面：{_selected_pair_label(pair)}", "距离/TTC 曲线"),
+    )
+    first_traces = _plotly_frame_traces(
+        go,
+        first_frame,
+        selected_pair=pair,
+        trail=cache.trail_for_step(sampled_steps[0], seconds=trail_seconds),
+        edge_series=edge_series,
+        layers=active_layers,
+    )
+    for trace in first_traces:
+        fig.add_trace(trace)
+
+    frames = []
+    for step in sampled_steps:
+        frame = cache.get_frame(step)
+        frames.append(
+            go.Frame(
+                name=str(step),
+                data=_plotly_frame_traces(
+                    go,
+                    frame,
+                    selected_pair=pair,
+                    trail=cache.trail_for_step(step, seconds=trail_seconds),
+                    edge_series=edge_series,
+                    layers=active_layers,
+                ),
+                layout={"title": {"text": f"场景 {frame.scenario_id} | 步数 {frame.step} | t={frame.timestamp:.2f}s | {view_mode_label(frame.view_mode)}"}},
+            )
+        )
+    fig.frames = frames
+    fig.update_layout(
+        title=f"场景 {first_frame.scenario_id} | 步数 {first_frame.step} | t={first_frame.timestamp:.2f}s | {view_mode_label(first_frame.view_mode)}",
+        height=760,
+        template="plotly_white",
+        margin={"l": 20, "r": 20, "t": 80, "b": 35},
+        legend={"orientation": "h", "yanchor": "bottom", "y": -0.08, "xanchor": "left", "x": 0},
+        updatemenus=[
+            {
+                "type": "buttons",
+                "showactive": False,
+                "x": 0.02,
+                "y": 1.08,
+                "buttons": [
+                    {"label": "播放", "method": "animate", "args": [None, {"frame": {"duration": 300, "redraw": True}, "fromcurrent": True, "transition": {"duration": 0}}]},
+                    {"label": "暂停", "method": "animate", "args": [[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}]},
+                ],
+            }
+        ],
+        sliders=[
+            {
+                "active": 0,
+                "currentvalue": {"prefix": "步数 "},
+                "steps": [
+                    {"label": str(step), "method": "animate", "args": [[str(step)], {"mode": "immediate", "frame": {"duration": 0, "redraw": True}, "transition": {"duration": 0}}]}
+                    for step in sampled_steps
+                ],
+            }
+        ],
+    )
+    fig.update_xaxes(title_text="x / m", row=1, col=1)
+    fig.update_yaxes(title_text="y / m", scaleanchor="x", scaleratio=1, row=1, col=1)
+    fig.update_yaxes(title_text="高度 / m", row=1, col=2)
+    fig.update_xaxes(title_text="时间 / s", row=2, col=2)
+    fig.update_yaxes(title_text="距离 / m", row=2, col=2)
+    return fig, sampled
+
+
 def plot_topview_frame(
     frame: AnimationFrame,
     path: str | Path | None = None,
@@ -344,6 +658,146 @@ def plot_height_profile(
     ax.set_ylabel("高度 / m")
     ax.set_title("高度剖面")
     ax.legend(loc="best")
+    fig.tight_layout()
+    return _save_or_return(fig, path, dpi=dpi)
+
+
+def plot_25d_frame(
+    frame: AnimationFrame,
+    path: str | Path | None = None,
+    *,
+    selected_pair: tuple[Any, Any] | None = None,
+    trail: pd.DataFrame | None = None,
+    edge_series: pd.DataFrame | None = None,
+    layers: dict[str, bool] | None = None,
+    dpi: int = 160,
+):
+    """Draw a static 2.5D frame used by PNG/GIF/MP4 export."""
+
+    active_layers = {**DEFAULT_PLOTLY_LAYERS, **(layers or {})}
+    plt = _try_import_pyplot()
+    if plt is None:
+        if path is None:
+            raise RuntimeError("matplotlib is not available")
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        _write_placeholder_png(output)
+        return output
+    fig = plt.figure(figsize=(11, 6.5))
+    grid = fig.add_gridspec(2, 2, width_ratios=[2.05, 1.0], height_ratios=[1.0, 1.0])
+    ax_top = fig.add_subplot(grid[:, 0])
+    ax_height = fig.add_subplot(grid[0, 1])
+    ax_curve = fig.add_subplot(grid[1, 1])
+    static_lookup = _crane_lookup(frame.static)
+    geometry_lookup = _crane_lookup(frame.geometry)
+    selected_ids = {str(selected_pair[0]), str(selected_pair[1])} if selected_pair is not None else set()
+
+    if active_layers.get("radius", True):
+        for _, row in frame.static.iterrows():
+            base_x = float(row["base_x"])
+            base_y = float(row["base_y"])
+            if "max_radius" in row:
+                ax_top.add_patch(plt.Circle((base_x, base_y), float(row["max_radius"]), fill=False, alpha=0.16, color="#64748b"))
+            if "min_radius" in row:
+                ax_top.add_patch(plt.Circle((base_x, base_y), float(row["min_radius"]), fill=False, alpha=0.25, color="#64748b", linestyle="--"))
+
+    if active_layers.get("tasks", True):
+        for _, row in frame.tasks.iterrows():
+            crane_key = row.get("crane_index", row.get("crane_id"))
+            base = static_lookup.get(crane_key)
+            if base is None:
+                base = static_lookup.get(str(row.get("crane_id", crane_key)))
+            if base is None:
+                continue
+            pickup = _task_point(base, row, "pickup")
+            dropoff = _task_point(base, row, "dropoff")
+            if pickup is not None:
+                ax_top.scatter(*pickup, marker="^", color="#b7791f", s=28, alpha=0.7)
+            if dropoff is not None:
+                ax_top.scatter(*dropoff, marker="s", color="#2f855a", s=24, alpha=0.7)
+
+    if active_layers.get("trail", True) and trail is not None and not trail.empty:
+        group_col = "crane_id" if "crane_id" in trail.columns else "crane_index"
+        for _, data in trail.groupby(group_col):
+            ax_top.plot(data["hook_x"], data["hook_y"], color="#64748b", linewidth=1.0, alpha=0.38)
+
+    if active_layers.get("edges", True):
+        for _, row in frame.edges.iterrows():
+            left = geometry_lookup.get(row.get("crane_i_index", row.get("crane_i")))
+            if left is None:
+                left = geometry_lookup.get(str(row.get("crane_i")))
+            right = geometry_lookup.get(row.get("crane_j_index", row.get("crane_j")))
+            if right is None:
+                right = geometry_lookup.get(str(row.get("crane_j")))
+            if left is None or right is None:
+                continue
+            is_selected = selected_pair is not None and _id_matches(row.get("crane_i"), selected_pair[0]) and _id_matches(row.get("crane_j"), selected_pair[1])
+            min_distance = min(float(row.get(col, 9999.0)) for col in ["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"])
+            color = "#dc2626" if is_selected else "#d97706" if min_distance < 5.0 else "#94a3b8"
+            ax_top.plot([float(left["hook_x"]), float(right["hook_x"])], [float(left["hook_y"]), float(right["hook_y"])], color=color, linewidth=2.2 if is_selected else 0.9, alpha=0.62)
+
+    if active_layers.get("future_risk", True) and frame.labels is not None and not frame.labels.empty:
+        for _, row in frame.labels.iterrows():
+            if not _risk_positive(row):
+                continue
+            left = geometry_lookup.get(row.get("crane_i_index", row.get("crane_i")))
+            if left is None:
+                left = geometry_lookup.get(str(row.get("crane_i")))
+            right = geometry_lookup.get(row.get("crane_j_index", row.get("crane_j")))
+            if right is None:
+                right = geometry_lookup.get(str(row.get("crane_j")))
+            if left is None or right is None:
+                continue
+            ax_top.plot([float(left["hook_x"]), float(right["hook_x"])], [float(left["hook_y"]), float(right["hook_y"])], color="#be123c", linewidth=2.4, linestyle="--", alpha=0.85)
+
+    for _, row in frame.geometry.iterrows():
+        crane_id = row.get("crane_id", row.get("crane_index", ""))
+        is_selected = str(crane_id) in selected_ids
+        color = "#0f766e" if is_selected else "#2563eb"
+        ax_top.plot([row["root_x"], row["tip_x"]], [row["root_y"], row["tip_y"]], color=color, linewidth=3.2 if is_selected else 1.8)
+        ax_top.scatter(row["hook_x"], row["hook_y"], marker="x", color="#c2410c", s=42)
+        label = f"{crane_id}\nh={float(row.get('hook_z', 0.0)):.1f}m" if active_layers.get("height_text", True) else str(crane_id)
+        ax_top.text(row["hook_x"], row["hook_y"], label, fontsize=7, color="#1f2937")
+
+    for _, row in frame.static.iterrows():
+        ax_top.scatter(row["base_x"], row["base_y"], color="#111827", s=36)
+        ax_top.text(row["base_x"], row["base_y"], f" {row.get('crane_id', row.get('crane_index', ''))}", fontsize=8)
+
+    ax_top.set_title("x-y 俯视动画")
+    ax_top.set_xlabel("x / m")
+    ax_top.set_ylabel("y / m")
+    ax_top.set_aspect("equal", adjustable="datalim")
+    ax_top.grid(True, color="#e5e7eb", linewidth=0.5)
+
+    row_i = _geometry_row(frame.geometry, selected_pair[0]) if selected_pair is not None else None
+    row_j = _geometry_row(frame.geometry, selected_pair[1]) if selected_pair is not None else None
+    if row_i is not None and row_j is not None:
+        labels = [str(selected_pair[0]), str(selected_pair[1])]
+        x = range(len(labels))
+        ax_height.bar([v - 0.16 for v in x], [float(row_i.get("root_z", 0.0)), float(row_j.get("root_z", 0.0))], width=0.32, label="臂根高度", color="#4c78a8")
+        ax_height.bar([v + 0.16 for v in x], [float(row_i.get("hook_z", 0.0)), float(row_j.get("hook_z", 0.0))], width=0.32, label="吊钩高度", color="#f58518")
+        ax_height.set_xticks(list(x), labels)
+    ax_height.set_title(f"高度剖面：{_selected_pair_label(selected_pair)}")
+    ax_height.set_ylabel("高度 / m")
+    if ax_height.get_legend_handles_labels()[0]:
+        ax_height.legend(loc="best", fontsize=7)
+    ax_height.grid(True, color="#e5e7eb", linewidth=0.5)
+
+    if active_layers.get("distance_curve", True) and edge_series is not None and not edge_series.empty:
+        data = edge_series.sort_values("timestamp" if "timestamp" in edge_series.columns else "step")
+        x_col = "timestamp" if "timestamp" in data.columns else "step"
+        for column, color in zip(["d_arm_arm", "d_arm_hook_i_to_j", "d_arm_hook_j_to_i", "d_hook_hook"], ["#4c78a8", "#f58518", "#54a24b", "#b279a2"], strict=True):
+            if column in data.columns:
+                ax_curve.plot(data[x_col], data[column], label=field_label(column), color=color, linewidth=1.2)
+        ax_curve.axvline(frame.timestamp if x_col == "timestamp" else frame.step, color="#111827", linestyle=":", linewidth=1.0)
+    ax_curve.set_title("距离/TTC 曲线")
+    ax_curve.set_xlabel("时间 / s")
+    ax_curve.set_ylabel("距离 / m")
+    if ax_curve.get_legend_handles_labels()[0]:
+        ax_curve.legend(loc="best", fontsize=6)
+    ax_curve.grid(True, color="#e5e7eb", linewidth=0.5)
+
+    fig.suptitle(f"场景 {frame.scenario_id} | 步数 {frame.step} | t={frame.timestamp:.2f}s | {view_mode_label(frame.view_mode)}")
     fig.tight_layout()
     return _save_or_return(fig, path, dpi=dpi)
 

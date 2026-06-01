@@ -19,7 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
 parquet = ["pyarrow>=14.0"]
-visual = ["streamlit>=1.30"]
+visual = ["streamlit>=1.30", "plotly>=5.20", "imageio>=2.34", "imageio-ffmpeg>=0.5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

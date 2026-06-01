@@ -17,6 +17,9 @@ class PlaybackState:
     playing: bool
     loop: bool
     view_mode: ViewMode
+    clip_start_step: int | None = None
+    clip_end_step: int | None = None
+    selected_pair: tuple[Any, Any] | None = None
 
 
 def create_frame_cache(repository: RunDataRepository, scenario_id: Any, view_mode: str | ViewMode) -> FrameCache:
@@ -50,21 +53,99 @@ def risk_clip_for_event(cache: FrameCache, event: Any, pre_seconds: float = 10.0
     return cache.clip_around_event(event, pre_seconds=pre_seconds, post_seconds=post_seconds)
 
 
-def advance_playback(cache: FrameCache, state: PlaybackState, direction: int = 1) -> PlaybackState:
+def initialize_playback_state(
+    cache: FrameCache,
+    scenario_id: Any,
+    view_mode: str | ViewMode,
+    *,
+    speed: float = 1.0,
+    loop: bool = False,
+    step: int | None = None,
+    selected_pair: tuple[Any, Any] | None = None,
+) -> PlaybackState:
+    mode = ViewMode.parse(view_mode)
+    selected_step = cache.nearest_step(step) if step is not None and cache.steps else cache.steps[0] if cache.steps else 0
+    return PlaybackState(
+        scenario_id=scenario_id,
+        step=selected_step,
+        speed=float(speed),
+        playing=False,
+        loop=bool(loop),
+        view_mode=mode,
+        selected_pair=selected_pair or cache.strongest_risk_pair(selected_step),
+    )
+
+
+def _active_steps(cache: FrameCache, state: PlaybackState) -> list[int]:
+    steps = cache.steps
+    if state.clip_start_step is None and state.clip_end_step is None:
+        return steps
+    start = state.clip_start_step if state.clip_start_step is not None else min(steps)
+    end = state.clip_end_step if state.clip_end_step is not None else max(steps)
+    return [step for step in steps if int(start) <= step <= int(end)]
+
+
+def next_step_by_speed(cache: FrameCache, state: PlaybackState, direction: int = 1) -> tuple[int, bool]:
+    """Return the next step and whether playback should keep running."""
+
     if not cache.steps:
-        return state
-    current = cache.nearest_step(state.step)
-    index = cache.steps.index(current)
-    next_index = index + int(direction)
+        return state.step, False
+    steps = _active_steps(cache, state) or cache.steps
+    current = min(steps, key=lambda step: abs(step - cache.nearest_step(state.step)))
+    index = steps.index(current)
+    jump = max(1, int(round(abs(float(state.speed)))))
+    next_index = index + (jump * (1 if direction >= 0 else -1))
     if state.loop:
-        next_step = cache.steps[next_index % len(cache.steps)]
-    else:
-        next_step = cache.steps[max(0, min(len(cache.steps) - 1, next_index))]
+        return steps[next_index % len(steps)], True
+    if next_index < 0:
+        return steps[0], False
+    if next_index >= len(steps):
+        return steps[-1], False
+    return steps[next_index], state.playing
+
+
+def advance_playback(cache: FrameCache, state: PlaybackState, direction: int = 1) -> PlaybackState:
+    next_step, keep_playing = next_step_by_speed(cache, state, direction=direction)
     return PlaybackState(
         scenario_id=state.scenario_id,
         step=next_step,
         speed=state.speed,
-        playing=state.playing,
+        playing=keep_playing if state.playing else state.playing,
         loop=state.loop,
         view_mode=state.view_mode,
+        clip_start_step=state.clip_start_step,
+        clip_end_step=state.clip_end_step,
+        selected_pair=state.selected_pair,
+    )
+
+
+def playback_tick(cache: FrameCache, state: PlaybackState) -> PlaybackState:
+    if not state.playing:
+        return state
+    return advance_playback(cache, state, direction=1)
+
+
+def clip_steps_for_risk_event(
+    cache: FrameCache,
+    event: Any,
+    *,
+    pre_seconds: float = 10.0,
+    post_seconds: float = 10.0,
+) -> PlaybackState:
+    clip = cache.clip_around_event(event, pre_seconds=pre_seconds, post_seconds=post_seconds)
+    start_step = clip.steps[0] if clip.steps else clip.start_step
+    end_step = clip.steps[-1] if clip.steps else clip.end_step
+    selected_pair = (getattr(event, "crane_i", None), getattr(event, "crane_j", None))
+    if selected_pair == (None, None):
+        selected_pair = cache.strongest_risk_pair(getattr(event, "step", start_step))
+    return PlaybackState(
+        scenario_id=getattr(event, "scenario_id", cache.scenario_data.scenario_id),
+        step=start_step,
+        speed=1.0,
+        playing=True,
+        loop=False,
+        view_mode=cache.view_mode,
+        clip_start_step=start_step,
+        clip_end_step=end_step,
+        selected_pair=selected_pair,
     )
